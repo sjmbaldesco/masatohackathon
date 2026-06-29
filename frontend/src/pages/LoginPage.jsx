@@ -10,7 +10,7 @@ const ROLE_ROUTES = {
 };
 
 export default function LoginPage() {
-  const { user, role, loading, signInWithGoogle } = useAuth();
+  const { user, role, loading, authError, signInWithGoogle } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -35,6 +35,12 @@ export default function LoginPage() {
           <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="h-5 w-5" alt="Google" />
           Continue with Google
         </button>
+
+        {authError && (
+          <p className="rounded-lg bg-red-500/20 px-4 py-2 text-xs text-red-300 text-left break-words">
+            {authError}
+          </p>
+        )}
 
         <p className="text-xs text-white/30">
           By signing in you agree to our Terms of Service.
