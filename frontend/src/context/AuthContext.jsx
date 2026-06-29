@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import {
   onAuthStateChanged,
-  signInAnonymously,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signInWithPopup,
@@ -108,16 +107,16 @@ export function AuthProvider({ children }) {
       throw new Error(msg);
     }
     try {
-      let currentUser = auth.currentUser;
-      if (!currentUser) {
-        const cred = await signInAnonymously(auth);
-        currentUser = cred.user;
-      }
-      await _persistRole(currentUser, "driver", {
-        driver_id: driverId.toUpperCase(),
-      });
+      const syntheticEmail = `${driverId.replace(/[^a-z0-9]/gi, "").toLowerCase()}@pasada.app`;
+      const cred = await signInWithEmailAndPassword(auth, syntheticEmail, pin);
+      // Set state immediately so ProtectedRoute doesn't bounce before onAuthStateChanged fires
+      setUser(cred.user);
+      setRole("driver");
     } catch (err) {
-      const msg = _friendlyError(err.code) ?? err.message;
+      const driverCodes = ["auth/user-not-found", "auth/wrong-password", "auth/invalid-credential"];
+      const msg = driverCodes.includes(err.code)
+        ? "Invalid Driver ID or PIN."
+        : (_friendlyError(err.code) ?? err.message);
       setAuthError(msg);
       throw err;
     }
