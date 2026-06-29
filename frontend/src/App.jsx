@@ -4,8 +4,16 @@ import PassengerPage from "./pages/PassengerPage";
 import DriverPage from "./pages/DriverPage";
 import AdminDashboard from "./pages/AdminDashboard";
 import ProtectedRoute from "./components/shared/ProtectedRoute";
+import LoadingSpinner from "./components/shared/LoadingSpinner";
+import { useAuth } from "./context/AuthContext";
 
 export default function App() {
+  const { loading } = useAuth();
+
+  if (loading) {
+    return <LoadingSpinner fullScreen message="Initializing AI Systems…" />;
+  }
+
   return (
     <Routes>
       <Route path="/" element={<RoleSelect />} />
@@ -38,9 +46,7 @@ export default function App() {
         }
       />
 
-      {/* Legacy coop route */}
       <Route path="/coop" element={<Navigate to="/admin" replace />} />
-
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

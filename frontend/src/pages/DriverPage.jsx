@@ -1,6 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { GoogleMap, Marker, Polyline } from "@react-google-maps/api";
-import { Home, DollarSign, User, MapPin, Zap, Users, Gauge, TrendingUp, LogOut } from "lucide-react";
+import {
+  Home, Navigation, DollarSign, Bell, MoreHorizontal,
+  MapPin, Gauge, Users, Zap, ChevronRight, LogOut,
+  TrendingUp, Clock, Bus,
+} from "lucide-react";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
 import { useCollection } from "../hooks/useFirestore";
@@ -16,36 +20,26 @@ const CAPACITY = 18;
 const ROUTE_ID = "R01";
 
 const TABS = [
-  { id: "home", label: "Home", icon: Home },
-  { id: "earnings", label: "Earnings", icon: DollarSign },
-  { id: "profile", label: "Profile", icon: User },
+  { id: "home",     label: "HOME",     icon: Home          },
+  { id: "trips",    label: "TRIPS",    icon: Navigation    },
+  { id: "earnings", label: "EARNINGS", icon: DollarSign    },
+  { id: "alerts",   label: "ALERTS",   icon: Bell          },
+  { id: "more",     label: "MORE",     icon: MoreHorizontal },
 ];
 
-const MAP_OPTIONS = {
+const WARM_MAP_OPTIONS = {
   disableDefaultUI: true,
-  zoomControl: false,
-  streetViewControl: false,
   styles: [
-    { elementType: "geometry", stylers: [{ color: "#1d2c4d" }] },
-    { elementType: "labels.text.stroke", stylers: [{ color: "#1a3646" }] },
-    { elementType: "labels.text.fill", stylers: [{ color: "#8ec3b9" }] },
-    { featureType: "road", elementType: "geometry", stylers: [{ color: "#304a7d" }] },
-    { featureType: "road", elementType: "labels.text.fill", stylers: [{ color: "#98a5be" }] },
-    { featureType: "water", elementType: "geometry", stylers: [{ color: "#0e1626" }] },
-    { featureType: "poi", stylers: [{ visibility: "off" }] },
+    { elementType: "geometry",            stylers: [{ color: "#f0e8da" }] },
+    { elementType: "labels.text.fill",    stylers: [{ color: "#7a5c42" }] },
+    { elementType: "labels.text.stroke",  stylers: [{ color: "#f0e8da" }] },
+    { featureType: "road", elementType: "geometry",         stylers: [{ color: "#ffffff" }] },
+    { featureType: "road.arterial", elementType: "geometry", stylers: [{ color: "#ffe8cc" }] },
+    { featureType: "water", elementType: "geometry",        stylers: [{ color: "#bdd5e0" }] },
+    { featureType: "poi",     stylers: [{ visibility: "off" }] },
     { featureType: "transit", stylers: [{ visibility: "off" }] },
   ],
 };
-
-function StatChip({ icon: Icon, label, value, valueClass = "text-white" }) {
-  return (
-    <div className="flex flex-1 flex-col items-center gap-0.5 rounded-xl bg-white/10 py-2 px-1">
-      <Icon size={14} className="text-white/40" strokeWidth={1.8} />
-      <span className={`text-sm font-bold ${valueClass}`}>{value}</span>
-      <span className="text-[9px] text-white/40 uppercase tracking-wide">{label}</span>
-    </div>
-  );
-}
 
 export default function DriverPage() {
   const { user, logout } = useAuth();
@@ -54,21 +48,17 @@ export default function DriverPage() {
   const [scoreData, setScoreData] = useState(null);
   const [scoreLoading, setScoreLoading] = useState(false);
 
-  // Live driver doc
   const { data: driverDocs } = useCollection("drivers", [["uid", "==", user?.uid ?? "__none__"]]);
   const driver = driverDocs?.[0] ?? {};
   const tripActive = driver.status === "in_transit";
 
-  // Live demand on route
   const { data: stops } = useCollection("stops", [["route", "==", ROUTE_ID]]);
   const totalWaiting = stops.reduce((s, st) => s + (st.count ?? 0), 0);
 
-  // Route polyline from Firestore (fall back to demo polyline)
   const { data: routeDocs } = useCollection("routes");
   const route = routeDocs?.find((r) => r.route_id === ROUTE_ID) ?? {};
   const polyline = route.polyline?.length ? route.polyline : DEMO_POLYLINE;
 
-  // Init driver doc on first load
   useEffect(() => {
     if (!user?.uid) return;
     setDoc(
@@ -95,6 +85,10 @@ export default function DriverPage() {
     driver.lat && driver.lng
       ? { lat: driver.lat, lng: driver.lng }
       : DEFAULT_CENTER;
+
+  const occCount = driver.occupancy_count ?? 0;
+  const occPct   = Math.round((occCount / CAPACITY) * 100);
+  const occHex   = occupancyColor(occPct);
 
   async function handleStartTrip() {
     await setDoc(
@@ -136,35 +130,39 @@ export default function DriverPage() {
     }
   }
 
-  const occCount = driver.occupancy_count ?? 0;
-  const occPct = Math.round((occCount / CAPACITY) * 100);
-  const occHex = occupancyColor(occPct);
-
   return (
-    <div className="flex h-screen max-w-[430px] mx-auto flex-col overflow-hidden bg-brand-dark font-manrope">
+    <div className="flex h-screen max-w-[430px] mx-auto flex-col overflow-hidden bg-pasada-cream font-manrope">
       {activeTab === "home" && (
-        <HomeTab
-          driver={driver}
-          mapCenter={mapCenter}
-          polyline={polyline}
-          tripActive={tripActive}
-          totalWaiting={totalWaiting}
-          occCount={occCount}
-          occHex={occHex}
-          route={route}
-          scoreData={scoreData}
-          scoreLoading={scoreLoading}
-          onFetchScore={fetchScore}
-          onStartTrip={handleStartTrip}
-          onEndTrip={handleEndTrip}
-          onOpenModal={() => setShowModal(true)}
-        />
+        tripActive
+          ? <ActiveTripTab
+              driver={driver}
+              mapCenter={mapCenter}
+              polyline={polyline}
+              totalWaiting={totalWaiting}
+              occCount={occCount}
+              occHex={occHex}
+              route={route}
+              scoreData={scoreData}
+              scoreLoading={scoreLoading}
+              onFetchScore={fetchScore}
+              onEndTrip={handleEndTrip}
+              onOpenModal={() => setShowModal(true)}
+            />
+          : <IdleHomeTab
+              driver={driver}
+              totalWaiting={totalWaiting}
+              route={route}
+              scoreData={scoreData}
+              scoreLoading={scoreLoading}
+              onFetchScore={fetchScore}
+              onStartTrip={handleStartTrip}
+              onOpenModal={() => setShowModal(true)}
+            />
       )}
-
-      {activeTab === "earnings" && <EarningsTab driverUid={user?.uid} />}
-      {activeTab === "profile" && (
-        <ProfileTab driver={driver} onLogout={logout} />
-      )}
+      {activeTab === "trips"    && <TripsTab />}
+      {activeTab === "earnings" && <EarningsTab />}
+      {activeTab === "alerts"   && <AlertsTab totalWaiting={totalWaiting} />}
+      {activeTab === "more"     && <MoreTab driver={driver} onLogout={logout} />}
 
       <TabBar tabs={TABS} active={activeTab} onChange={setActiveTab} />
 
@@ -180,19 +178,109 @@ export default function DriverPage() {
   );
 }
 
-function HomeTab({
-  driver, mapCenter, polyline, tripActive, totalWaiting,
-  occCount, occHex, route, scoreData, scoreLoading,
-  onFetchScore, onStartTrip, onEndTrip, onOpenModal,
-}) {
+// ── Idle Home ─────────────────────────────────────────────────────────────────
+
+function IdleHomeTab({ driver, totalWaiting, route, scoreData, scoreLoading, onFetchScore, onStartTrip, onOpenModal }) {
+  const TODAY = [
+    { label: "Trips",      value: "4"    },
+    { label: "Passengers", value: "72"   },
+    { label: "Earnings",   value: "₱840" },
+  ];
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-pasada-cream">
+      {/* Header */}
+      <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-5">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-pasada-muted">Driver Mode</p>
+            <h1 className="font-garamond text-3xl font-bold text-pasada-dark mt-0.5">
+              {driver.driver_name ?? "J. Dela Cruz"}
+            </h1>
+            <p className="text-sm text-pasada-warm mt-0.5">{driver.plate ?? "ABC 1234"}</p>
+          </div>
+          <div className="flex items-center gap-1.5 rounded-full bg-green-50 border border-green-200 px-3 py-1.5">
+            <span className="size-2 rounded-full bg-green-500 animate-pulse" />
+            <span className="text-xs font-semibold text-green-700">Online</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-4 py-4 space-y-4">
+        {/* Route card */}
+        <div className="rounded-2xl bg-white border border-pasada-border p-4 flex items-center gap-3">
+          <div className="flex size-11 items-center justify-center rounded-xl bg-pasada-rust/10">
+            <Bus size={22} className="text-pasada-rust" strokeWidth={1.8} />
+          </div>
+          <div className="flex-1">
+            <p className="text-xs text-pasada-muted uppercase tracking-wide">Current Route</p>
+            <p className="font-bold text-pasada-dark">{route.name ?? "Lumban → Sta. Cruz"}</p>
+            <p className="text-xs text-pasada-muted mt-0.5">Route 01 · 18 seats</p>
+          </div>
+          <ChevronRight size={18} className="text-pasada-muted/60" />
+        </div>
+
+        {/* Today stats */}
+        <div className="grid grid-cols-3 gap-3">
+          {TODAY.map(({ label, value }) => (
+            <div key={label} className="rounded-2xl bg-white border border-pasada-border p-3 text-center">
+              <p className="text-lg font-black text-pasada-dark">{value}</p>
+              <p className="text-[10px] text-pasada-muted mt-0.5">{label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Waiting demand chip */}
+        {totalWaiting > 0 && (
+          <div className="flex items-center gap-2.5 rounded-2xl bg-pasada-rust/10 border border-pasada-rust/20 px-4 py-3">
+            <Zap size={16} className="text-pasada-rust shrink-0" />
+            <p className="text-sm text-pasada-dark">
+              <span className="font-bold text-pasada-rust">{totalWaiting}</span> passengers waiting on route
+            </p>
+          </div>
+        )}
+
+        {/* Departure score */}
+        <DepartureScore
+          score={scoreData?.score ?? null}
+          expectedPassengers={scoreData?.expected_passengers}
+          travelTimeMin={scoreData?.travel_time_min}
+          expectedRevenue={scoreData?.expected_revenue}
+          recommendation={scoreData?.recommendation}
+          onRefresh={onFetchScore}
+        />
+
+        {/* Action buttons */}
+        <div className="flex gap-3 pt-1">
+          <button
+            onClick={onOpenModal}
+            className="flex-1 rounded-xl border-2 border-pasada-border bg-white py-3.5 text-sm font-bold text-pasada-dark hover:bg-pasada-cream transition-colors"
+          >
+            Update Occupancy
+          </button>
+          <button
+            onClick={onStartTrip}
+            className="flex-1 rounded-xl bg-pasada-rust py-3.5 text-sm font-bold text-white hover:bg-pasada-rust/90 transition-colors"
+          >
+            Start New Trip
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Active Trip Map ────────────────────────────────────────────────────────────
+
+function ActiveTripTab({ driver, mapCenter, polyline, totalWaiting, occCount, occHex, route, scoreData, scoreLoading, onFetchScore, onEndTrip, onOpenModal }) {
   const markerIcon = MAPS_API_KEY
     ? {
         path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
-        fillColor: "#F57C00",
+        fillColor: "#C2652A",
         fillOpacity: 1,
         strokeColor: "#fff",
         strokeWeight: 2,
-        scale: 1.4,
+        scale: 1.5,
         anchor: { x: 12, y: 22 },
       }
     : undefined;
@@ -206,160 +294,154 @@ function HomeTab({
             mapContainerStyle={{ width: "100%", height: "100%" }}
             center={mapCenter}
             zoom={15}
-            options={MAP_OPTIONS}
+            options={WARM_MAP_OPTIONS}
           >
             {driver.lat && (
-              <Marker
-                position={{ lat: driver.lat, lng: driver.lng }}
-                icon={markerIcon}
-              />
+              <Marker position={{ lat: driver.lat, lng: driver.lng }} icon={markerIcon} />
             )}
-            {tripActive && polyline.length > 1 && (
+            {polyline.length > 1 && (
               <Polyline
                 path={polyline.map(([lat, lng]) => ({ lat, lng }))}
-                options={{ strokeColor: "#F57C00", strokeWeight: 4, strokeOpacity: 0.8 }}
+                options={{ strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: 0.8 }}
               />
             )}
           </GoogleMap>
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-[#1d2c4d]">
-            <p className="text-white/30 text-sm text-center px-6">
+          <div className="w-full h-full flex items-center justify-center bg-[#f0e8da]">
+            <p className="text-pasada-warm text-sm text-center px-6">
               Add VITE_GOOGLE_MAPS_API_KEY to .env to show map
             </p>
           </div>
         )}
       </div>
 
-      {/* Bottom gradient overlay */}
+      {/* IN TRANSIT badge */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
+        <div className="flex items-center gap-1.5 rounded-full bg-white/90 shadow-lg border border-pasada-border px-4 py-1.5">
+          <span className="size-2 rounded-full bg-green-500 animate-pulse" />
+          <span className="text-xs font-bold text-pasada-dark uppercase tracking-wide">In Transit</span>
+        </div>
+      </div>
+
+      {/* Bottom overlay */}
       <div
         className="absolute bottom-0 inset-x-0 z-10"
         style={{
           background:
-            "linear-gradient(to top, rgba(26,26,46,1) 0%, rgba(26,26,46,0.95) 40%, rgba(26,26,46,0) 100%)",
+            "linear-gradient(to top, rgba(250,245,238,1) 0%, rgba(250,245,238,0.97) 55%, rgba(250,245,238,0) 100%)",
           paddingTop: "80px",
         }}
       >
         {/* Route label */}
         <div className="px-4 pb-1">
-          <p className="text-[11px] text-white/40 uppercase tracking-widest">Route</p>
-          <p className="text-base font-bold text-white">
+          <p className="text-[11px] text-pasada-muted uppercase tracking-widest">Route</p>
+          <p className="text-base font-bold text-pasada-dark">
             {route.name ?? "Lumban → Sta. Cruz"}
           </p>
         </div>
 
         {/* Status strip */}
         <div className="flex gap-2 px-4 py-2">
-          <StatChip
-            icon={Users}
-            label="Onboard"
-            value={`${occCount}/${CAPACITY}`}
-            valueClass=""
-          />
-          <StatChip icon={Gauge} label="Speed" value={`${driver.speed_kmh ?? 0}`} />
-          <StatChip icon={MapPin} label="Stop" value={driver.current_stop ?? "—"} />
+          <StatChip icon={Users}  label="Onboard" value={`${occCount}/${CAPACITY}`} hex={occHex} />
+          <StatChip icon={Gauge}  label="Speed"   value={`${driver.speed_kmh ?? 0} km/h`} />
+          <StatChip icon={MapPin} label="Stop"    value={driver.current_stop ?? "—"} />
         </div>
 
         {/* Demand chip */}
-        <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl bg-brand-orange/20 border border-brand-orange/30 px-4 py-2.5">
-          <Zap size={15} className="text-brand-orange shrink-0" />
-          <span className="text-sm text-white/80">
-            <span className="font-bold text-brand-orange">{totalWaiting}</span> passengers waiting on route
-          </span>
-        </div>
-
-        {/* Departure Confidence Score */}
-        <div className="px-4 pb-3">
-          <DepartureScore
-            score={scoreData?.score ?? null}
-            expectedPassengers={scoreData?.expected_passengers}
-            travelTimeMin={scoreData?.travel_time_min}
-            expectedRevenue={scoreData?.expected_revenue}
-            recommendation={scoreData?.recommendation}
-            onRefresh={onFetchScore}
-          />
-        </div>
+        {totalWaiting > 0 && (
+          <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl bg-pasada-rust/10 border border-pasada-rust/20 px-4 py-2.5">
+            <Zap size={15} className="text-pasada-rust shrink-0" />
+            <span className="text-sm text-pasada-dark">
+              <span className="font-bold text-pasada-rust">{totalWaiting}</span> passengers waiting on route
+            </span>
+          </div>
+        )}
 
         {/* Action buttons */}
         <div className="flex gap-3 px-4 pb-6">
           <button
             onClick={onOpenModal}
-            className="flex-1 rounded-xl border border-white/20 bg-white/10 py-3.5 text-sm font-bold text-white hover:bg-white/20 transition"
+            className="flex-1 rounded-xl border-2 border-pasada-border bg-white py-3.5 text-sm font-bold text-pasada-dark hover:bg-pasada-cream transition-colors"
           >
             Update Occupancy
           </button>
-          {tripActive ? (
-            <button
-              onClick={onEndTrip}
-              className="flex-1 rounded-xl bg-brand-red py-3.5 text-sm font-bold text-white"
-            >
-              End Trip
-            </button>
-          ) : (
-            <button
-              onClick={onStartTrip}
-              className="flex-1 rounded-xl bg-brand-orange py-3.5 text-sm font-bold text-white"
-            >
-              Start Trip
-            </button>
-          )}
+          <button
+            onClick={onEndTrip}
+            className="flex-1 rounded-xl bg-red-600 py-3.5 text-sm font-bold text-white hover:bg-red-700 transition-colors"
+          >
+            End Trip
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-function EarningsTab({ driverUid }) {
-  const { data: earnings } = useCollection(`earnings/${driverUid}/days`);
-  const today = earnings?.find((e) => e.date === new Date().toISOString().slice(0, 10)) ?? {};
+function StatChip({ icon: Icon, label, value, hex }) {
+  return (
+    <div className="flex flex-1 flex-col items-center gap-0.5 rounded-xl bg-white/80 border border-pasada-border py-2 px-1">
+      <Icon size={13} className="text-pasada-muted" strokeWidth={1.8} />
+      <span className="text-sm font-bold text-pasada-dark" style={hex ? { color: hex } : {}}>
+        {value}
+      </span>
+      <span className="text-[9px] text-pasada-muted uppercase tracking-wide">{label}</span>
+    </div>
+  );
+}
 
-  const SEED_HISTORY = [
-    { date: "Mon", trips: 4, gross: 1020 },
-    { date: "Tue", trips: 5, gross: 1180 },
-    { date: "Wed", trips: 3, gross: 840 },
-    { date: "Thu", trips: 6, gross: 1450 },
-    { date: "Fri", trips: 5, gross: 1240 },
-    { date: "Sat", trips: 7, gross: 1680 },
-    { date: "Sun", trips: 4, gross: 960 },
-  ];
+// ── Trips Tab ─────────────────────────────────────────────────────────────────
 
-  const maxGross = Math.max(...SEED_HISTORY.map((d) => d.gross));
+const TRIP_HISTORY = [
+  { id: 1, date: "Today",       time: "08:15 AM", passengers: 14, fare: "₱182", status: "completed" },
+  { id: 2, date: "Today",       time: "10:40 AM", passengers: 18, fare: "₱234", status: "completed" },
+  { id: 3, date: "Yesterday",   time: "07:30 AM", passengers: 12, fare: "₱156", status: "completed" },
+  { id: 4, date: "Yesterday",   time: "09:55 AM", passengers: 16, fare: "₱208", status: "completed" },
+  { id: 5, date: "Mon, Dec 23", time: "08:00 AM", passengers: 11, fare: "₱143", status: "completed" },
+];
+
+function TripsTab() {
+  const [filter, setFilter] = useState("all");
+  const filters = ["all", "today", "this week"];
 
   return (
-    <div className="flex-1 overflow-y-auto bg-brand-dark px-4 py-5 space-y-5">
-      <h2 className="text-xl font-bold text-white">Earnings</h2>
-
-      {/* Today KPIs */}
-      <div className="grid grid-cols-3 gap-3">
-        <KpiBox label="Today's Gross" value={`₱${today.gross ?? 0}`} accent="text-brand-green" />
-        <KpiBox label="Trips Today" value={today.trips ?? 0} />
-        <KpiBox label="Passengers" value={today.passengers ?? 0} />
-      </div>
-
-      {/* 7-day bar chart */}
-      <div className="rounded-2xl bg-white/5 p-4">
-        <p className="mb-4 text-xs text-white/40 uppercase tracking-widest">Last 7 Days</p>
-        <div className="flex items-end gap-2 h-24">
-          {SEED_HISTORY.map((d) => (
-            <div key={d.date} className="flex flex-1 flex-col items-center gap-1">
-              <div
-                className="w-full rounded-t-md bg-brand-orange/70"
-                style={{ height: `${(d.gross / maxGross) * 100}%` }}
-              />
-              <span className="text-[9px] text-white/30">{d.date}</span>
-            </div>
+    <div className="flex-1 overflow-y-auto bg-pasada-cream">
+      <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-4">
+        <h1 className="font-garamond text-3xl font-bold text-pasada-dark">Trip History</h1>
+        <div className="mt-3 flex gap-2">
+          {filters.map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`rounded-full px-4 py-1.5 text-xs font-semibold capitalize transition-colors
+                ${filter === f
+                  ? "bg-pasada-rust text-white"
+                  : "bg-pasada-cream border border-pasada-border text-pasada-warm"
+                }`}
+            >
+              {f}
+            </button>
           ))}
         </div>
       </div>
 
-      {/* Per-day rows */}
-      <div className="rounded-2xl bg-white/5 divide-y divide-white/5">
-        {SEED_HISTORY.slice().reverse().map((d) => (
-          <div key={d.date} className="flex items-center justify-between px-4 py-3">
-            <div>
-              <p className="text-sm font-semibold text-white">{d.date}</p>
-              <p className="text-xs text-white/40">{d.trips} trips</p>
+      <div className="px-4 py-4 space-y-3">
+        {TRIP_HISTORY.map((trip) => (
+          <div
+            key={trip.id}
+            className="flex items-center gap-3 rounded-2xl bg-white border border-pasada-border p-4"
+          >
+            <div className="w-1 self-stretch rounded-full bg-pasada-rust/40" />
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-pasada-muted">{trip.date} · {trip.time}</p>
+                <p className="font-bold text-pasada-rust">{trip.fare}</p>
+              </div>
+              <p className="font-semibold text-pasada-dark mt-0.5">Lumban → Sta. Cruz</p>
+              <div className="flex items-center gap-1 mt-1">
+                <Users size={12} className="text-pasada-muted" />
+                <span className="text-xs text-pasada-muted">{trip.passengers} passengers</span>
+              </div>
             </div>
-            <p className="text-sm font-bold text-brand-green">₱{d.gross}</p>
           </div>
         ))}
       </div>
@@ -367,50 +449,169 @@ function EarningsTab({ driverUid }) {
   );
 }
 
-function KpiBox({ label, value, accent = "text-white" }) {
+// ── Earnings Tab ──────────────────────────────────────────────────────────────
+
+const WEEK_DATA = [
+  { day: "Mon", gross: 1020 },
+  { day: "Tue", gross: 1180 },
+  { day: "Wed", gross: 840  },
+  { day: "Thu", gross: 1450 },
+  { day: "Fri", gross: 1240 },
+  { day: "Sat", gross: 1680 },
+  { day: "Sun", gross: 960  },
+];
+
+function EarningsTab() {
+  const maxGross = Math.max(...WEEK_DATA.map((d) => d.gross));
+  const total    = WEEK_DATA.reduce((s, d) => s + d.gross, 0);
+  const trips    = 34;
+  const best     = Math.max(...WEEK_DATA.map((d) => d.gross));
+
   return (
-    <div className="rounded-xl bg-white/5 p-3 text-center">
-      <p className={`text-xl font-black ${accent}`}>{value}</p>
-      <p className="text-[10px] text-white/40 mt-1">{label}</p>
+    <div className="flex-1 overflow-y-auto bg-pasada-cream">
+      <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-4">
+        <h1 className="font-garamond text-3xl font-bold text-pasada-dark">Driver Earnings</h1>
+        <p className="text-sm text-pasada-muted mt-0.5">This week's performance</p>
+      </div>
+
+      <div className="px-4 py-4 space-y-4">
+        {/* KPI strip */}
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: "Total Gross", value: `₱${total.toLocaleString()}`, accent: "text-pasada-rust" },
+            { label: "Total Trips", value: trips },
+            { label: "Best Day",    value: `₱${best.toLocaleString()}`, accent: "text-green-600" },
+          ].map(({ label, value, accent }) => (
+            <div key={label} className="rounded-2xl bg-white border border-pasada-border p-3 text-center">
+              <p className={`text-lg font-black ${accent ?? "text-pasada-dark"}`}>{value}</p>
+              <p className="text-[10px] text-pasada-muted mt-0.5">{label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Bar chart */}
+        <div className="rounded-2xl bg-white border border-pasada-border p-4">
+          <p className="mb-4 text-xs font-semibold uppercase tracking-widest text-pasada-muted">
+            Last 7 Days
+          </p>
+          <div className="flex items-end gap-2 h-24">
+            {WEEK_DATA.map((d) => (
+              <div key={d.day} className="flex flex-1 flex-col items-center gap-1">
+                <div
+                  className="w-full rounded-t-md bg-pasada-rust/70"
+                  style={{ height: `${(d.gross / maxGross) * 100}%` }}
+                />
+                <span className="text-[9px] text-pasada-muted">{d.day}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Daily rows */}
+        <div className="rounded-2xl bg-white border border-pasada-border divide-y divide-pasada-border">
+          {WEEK_DATA.slice().reverse().map((d) => (
+            <div key={d.day} className="flex items-center justify-between px-4 py-3">
+              <div>
+                <p className="text-sm font-semibold text-pasada-dark">{d.day}</p>
+                <p className="text-xs text-pasada-muted">
+                  {Math.round(d.gross / 260)} trips
+                </p>
+              </div>
+              <p className="text-sm font-bold text-pasada-rust">₱{d.gross.toLocaleString()}</p>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
 
-function ProfileTab({ driver, onLogout }) {
+// ── Alerts Tab ────────────────────────────────────────────────────────────────
+
+function AlertsTab({ totalWaiting }) {
+  const alerts = [
+    { id: 1, type: "demand",  title: "High Demand Alert",     body: `${totalWaiting} passengers waiting on route R01.`,   time: "Just now" },
+    { id: 2, type: "info",    title: "Peak Hours Approaching", body: "Expected surge between 5–7 PM today.",                time: "1h ago"   },
+    { id: 3, type: "success", title: "Trip Completed",         body: "Trip #4 completed. Fare: ₱234. 18 passengers.",      time: "2h ago"   },
+  ];
+
+  const typeStyle = {
+    demand:  { bg: "bg-red-50",    dot: "bg-red-500",   text: "text-red-700"   },
+    info:    { bg: "bg-blue-50",   dot: "bg-blue-500",  text: "text-blue-700"  },
+    success: { bg: "bg-green-50",  dot: "bg-green-500", text: "text-green-700" },
+  };
+
   return (
-    <div className="flex-1 overflow-y-auto bg-brand-dark px-4 py-5 space-y-5">
-      <h2 className="text-xl font-bold text-white">Profile</h2>
-
-      <div className="flex flex-col items-center gap-3 rounded-2xl bg-white/5 p-6">
-        <div className="flex size-16 items-center justify-center rounded-full bg-brand-orange text-3xl font-black text-white">
-          {driver.driver_name?.[0] ?? "D"}
-        </div>
-        <div className="text-center">
-          <p className="font-bold text-white text-lg">{driver.driver_name ?? "Driver"}</p>
-          <p className="text-sm text-white/40">{driver.plate ?? "ABC 1234"}</p>
-        </div>
+    <div className="flex-1 overflow-y-auto bg-pasada-cream">
+      <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-4">
+        <h1 className="font-garamond text-3xl font-bold text-pasada-dark">Alerts</h1>
       </div>
 
-      <div className="rounded-2xl bg-white/5 divide-y divide-white/5">
-        {[
-          { label: "Route", value: "Lumban → Sta. Cruz" },
-          { label: "Capacity", value: `${driver.capacity ?? CAPACITY} seats` },
-          { label: "Status", value: driver.status ?? "idle" },
-        ].map(({ label, value }) => (
-          <div key={label} className="flex justify-between items-center px-4 py-3">
-            <span className="text-sm text-white/50">{label}</span>
-            <span className="text-sm font-medium text-white capitalize">{value}</span>
+      <div className="px-4 py-4 space-y-3">
+        {alerts.map((a) => {
+          const s = typeStyle[a.type];
+          return (
+            <div key={a.id} className={`rounded-2xl ${s.bg} border border-pasada-border p-4`}>
+              <div className="flex items-start gap-3">
+                <span className={`mt-1 size-2.5 shrink-0 rounded-full ${s.dot}`} />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <p className={`text-sm font-bold ${s.text}`}>{a.title}</p>
+                    <p className="text-[10px] text-pasada-muted">{a.time}</p>
+                  </div>
+                  <p className="text-sm text-pasada-warm mt-0.5">{a.body}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── More Tab ──────────────────────────────────────────────────────────────────
+
+function MoreTab({ driver, onLogout }) {
+  const items = [
+    { label: "Route",    value: "Lumban → Sta. Cruz" },
+    { label: "Capacity", value: `${driver.capacity ?? CAPACITY} seats` },
+    { label: "Status",   value: driver.status ?? "idle" },
+    { label: "Rating",   value: "4.8 / 5.0" },
+  ];
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-pasada-cream">
+      <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-5">
+        <div className="flex items-center gap-4">
+          <div className="flex size-14 items-center justify-center rounded-full bg-pasada-rust text-2xl font-black text-white">
+            {driver.driver_name?.[0] ?? "D"}
           </div>
-        ))}
+          <div>
+            <p className="text-lg font-bold text-pasada-dark">{driver.driver_name ?? "J. Dela Cruz"}</p>
+            <p className="text-sm text-pasada-muted">{driver.plate ?? "ABC 1234"}</p>
+          </div>
+        </div>
       </div>
 
-      <button
-        onClick={onLogout}
-        className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 py-3.5 text-sm font-bold text-white/70"
-      >
-        <LogOut size={16} />
-        Switch Role
-      </button>
+      <div className="px-4 py-4 space-y-4">
+        <div className="rounded-2xl bg-white border border-pasada-border divide-y divide-pasada-border">
+          {items.map(({ label, value }) => (
+            <div key={label} className="flex items-center justify-between px-4 py-3">
+              <span className="text-sm text-pasada-muted">{label}</span>
+              <span className="text-sm font-semibold text-pasada-dark capitalize">{value}</span>
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={onLogout}
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-pasada-border bg-white py-3.5 text-sm font-bold text-pasada-warm hover:bg-pasada-cream transition-colors"
+        >
+          <LogOut size={16} />
+          Switch Role
+        </button>
+      </div>
     </div>
   );
 }

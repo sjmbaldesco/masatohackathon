@@ -9,6 +9,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState(null); // "passenger" | "driver" | "admin"
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -30,20 +31,29 @@ export function AuthProvider({ children }) {
   }, []);
 
   async function selectRole(selectedRole) {
+    setAuthError(null);
     try {
       let currentUser = auth.currentUser;
       if (!currentUser) {
         const cred = await signInAnonymously(auth);
         currentUser = cred.user;
       }
-      await setDoc(doc(db, "users", currentUser.uid), {
+
+      // Set state immediately so ProtectedRoute doesn't bounce back on navigate
+      setUser(currentUser);
+      setRole(selectedRole);
+
+      // Fire-and-forget Firestore write — don't block navigation on it
+      setDoc(doc(db, "users", currentUser.uid), {
         uid: currentUser.uid,
         role: selectedRole,
         createdAt: new Date().toISOString(),
-      });
-      setRole(selectedRole);
+      }).catch((err) => console.warn("selectRole setDoc:", err));
     } catch (err) {
-      console.error("selectRole error:", err);
+      const msg = err.code === "auth/operation-not-allowed"
+        ? "Anonymous sign-in is disabled. Enable it in Firebase Console → Authentication → Sign-in methods."
+        : err.message;
+      setAuthError(msg);
       throw err;
     }
   }
@@ -54,7 +64,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, role, loading, selectRole, logout }}>
+    <AuthContext.Provider value={{ user, role, loading, authError, selectRole, logout }}>
       {children}
     </AuthContext.Provider>
   );

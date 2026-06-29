@@ -9,10 +9,11 @@ const ROLE_ROUTES = {
 };
 
 export default function ProtectedRoute({ children, roles = [] }) {
-  const { user, role, loading } = useAuth();
+  const { role, loading } = useAuth();
 
   if (loading) return <LoadingSpinner />;
-  if (!user) return <Navigate to="/" replace />;
+  // Gate on role — set synchronously by selectRole before navigation
+  if (!role) return <Navigate to="/" replace />;
   if (roles.length > 0 && !roles.includes(role)) {
     return <Navigate to={ROLE_ROUTES[role] ?? "/"} replace />;
   }
