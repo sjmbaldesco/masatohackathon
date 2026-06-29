@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment files — NEVER commit these
+.env
+.env.local
+.env.production
+backend/serviceAccountKey.json
+
+# Build output
+frontend/dist/
+frontend/.vite/
+
+# Python venv
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
