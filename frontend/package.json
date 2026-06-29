@@ -9,15 +9,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-google-maps/api": "^2.20.8",
+    "axios": "^1.7.2",
+    "firebase": "^10.12.4",
+    "leaflet": "^1.9.4",
+    "leaflet.heat": "^0.2.0",
+    "lucide-react": "^0.383.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.0",
-    "firebase": "^10.12.4",
-    "axios": "^1.7.2",
-    "leaflet": "^1.9.4",
     "react-leaflet": "^4.2.1",
-    "leaflet.heat": "^0.2.0",
-    "lucide-react": "^0.383.0"
+    "react-router-dom": "^6.26.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
