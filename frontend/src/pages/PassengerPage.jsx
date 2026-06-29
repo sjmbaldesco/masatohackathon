@@ -168,12 +168,13 @@ function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, o
                 icon={
                   MAPS_API_KEY
                     ? {
-                        path: window.google?.maps?.SymbolPath?.CIRCLE ?? 0,
+                        // SVG circle path, no window.google dependency
+                        path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
                         fillColor: selectedStop?.id === stop.id ? "#C2652A" : "#9A9088",
                         fillOpacity: 1,
                         strokeColor: "#fff",
                         strokeWeight: 2,
-                        scale: selectedStop?.id === stop.id ? 9 : 7,
+                        scale: selectedStop?.id === stop.id ? 1.1 : 0.85,
                       }
                     : undefined
                 }

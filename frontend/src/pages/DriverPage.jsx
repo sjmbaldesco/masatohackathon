@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { GoogleMap, Marker, Polyline } from "@react-google-maps/api";
 import {
-  Home, Navigation, DollarSign, Bell, MoreHorizontal,
+  Home, Navigation, DollarSign, MoreHorizontal,
   MapPin, Gauge, Users, Zap, ChevronRight, LogOut,
-  TrendingUp, Clock, Bus,
+  Clock, Bus,
 } from "lucide-react";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
@@ -20,10 +20,9 @@ const CAPACITY = 18;
 const ROUTE_ID = "R01";
 
 const TABS = [
-  { id: "home",     label: "HOME",     icon: Home          },
-  { id: "trips",    label: "TRIPS",    icon: Navigation    },
-  { id: "earnings", label: "EARNINGS", icon: DollarSign    },
-  { id: "alerts",   label: "ALERTS",   icon: Bell          },
+  { id: "home",     label: "HOME",     icon: Home           },
+  { id: "trips",    label: "TRIPS",    icon: Navigation     },
+  { id: "earnings", label: "EARNINGS", icon: DollarSign     },
   { id: "more",     label: "MORE",     icon: MoreHorizontal },
 ];
 
@@ -133,35 +132,25 @@ export default function DriverPage() {
   return (
     <div className="flex h-screen max-w-[430px] mx-auto flex-col overflow-hidden bg-pasada-cream font-manrope">
       {activeTab === "home" && (
-        tripActive
-          ? <ActiveTripTab
-              driver={driver}
-              mapCenter={mapCenter}
-              polyline={polyline}
-              totalWaiting={totalWaiting}
-              occCount={occCount}
-              occHex={occHex}
-              route={route}
-              scoreData={scoreData}
-              scoreLoading={scoreLoading}
-              onFetchScore={fetchScore}
-              onEndTrip={handleEndTrip}
-              onOpenModal={() => setShowModal(true)}
-            />
-          : <IdleHomeTab
-              driver={driver}
-              totalWaiting={totalWaiting}
-              route={route}
-              scoreData={scoreData}
-              scoreLoading={scoreLoading}
-              onFetchScore={fetchScore}
-              onStartTrip={handleStartTrip}
-              onOpenModal={() => setShowModal(true)}
-            />
+        <MapHomeTab
+          driver={driver}
+          mapCenter={mapCenter}
+          polyline={polyline}
+          tripActive={tripActive}
+          totalWaiting={totalWaiting}
+          occCount={occCount}
+          occHex={occHex}
+          route={route}
+          scoreData={scoreData}
+          scoreLoading={scoreLoading}
+          onFetchScore={fetchScore}
+          onStartTrip={handleStartTrip}
+          onEndTrip={handleEndTrip}
+          onOpenModal={() => setShowModal(true)}
+        />
       )}
       {activeTab === "trips"    && <TripsTab />}
       {activeTab === "earnings" && <EarningsTab />}
-      {activeTab === "alerts"   && <AlertsTab totalWaiting={totalWaiting} />}
       {activeTab === "more"     && <MoreTab driver={driver} onLogout={logout} />}
 
       <TabBar tabs={TABS} active={activeTab} onChange={setActiveTab} />
@@ -178,101 +167,9 @@ export default function DriverPage() {
   );
 }
 
-// ── Idle Home ─────────────────────────────────────────────────────────────────
+// ── Map Home Tab (always shows map) ───────────────────────────────────────────
 
-function IdleHomeTab({ driver, totalWaiting, route, scoreData, scoreLoading, onFetchScore, onStartTrip, onOpenModal }) {
-  const TODAY = [
-    { label: "Trips",      value: "4"    },
-    { label: "Passengers", value: "72"   },
-    { label: "Earnings",   value: "₱840" },
-  ];
-
-  return (
-    <div className="flex-1 overflow-y-auto bg-pasada-cream">
-      {/* Header */}
-      <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-pasada-muted">Driver Mode</p>
-            <h1 className="font-garamond text-3xl font-bold text-pasada-dark mt-0.5">
-              {driver.driver_name ?? "J. Dela Cruz"}
-            </h1>
-            <p className="text-sm text-pasada-warm mt-0.5">{driver.plate ?? "ABC 1234"}</p>
-          </div>
-          <div className="flex items-center gap-1.5 rounded-full bg-green-50 border border-green-200 px-3 py-1.5">
-            <span className="size-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs font-semibold text-green-700">Online</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-4 py-4 space-y-4">
-        {/* Route card */}
-        <div className="rounded-2xl bg-white border border-pasada-border p-4 flex items-center gap-3">
-          <div className="flex size-11 items-center justify-center rounded-xl bg-pasada-rust/10">
-            <Bus size={22} className="text-pasada-rust" strokeWidth={1.8} />
-          </div>
-          <div className="flex-1">
-            <p className="text-xs text-pasada-muted uppercase tracking-wide">Current Route</p>
-            <p className="font-bold text-pasada-dark">{route.name ?? "Lumban → Sta. Cruz"}</p>
-            <p className="text-xs text-pasada-muted mt-0.5">Route 01 · 18 seats</p>
-          </div>
-          <ChevronRight size={18} className="text-pasada-muted/60" />
-        </div>
-
-        {/* Today stats */}
-        <div className="grid grid-cols-3 gap-3">
-          {TODAY.map(({ label, value }) => (
-            <div key={label} className="rounded-2xl bg-white border border-pasada-border p-3 text-center">
-              <p className="text-lg font-black text-pasada-dark">{value}</p>
-              <p className="text-[10px] text-pasada-muted mt-0.5">{label}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Waiting demand chip */}
-        {totalWaiting > 0 && (
-          <div className="flex items-center gap-2.5 rounded-2xl bg-pasada-rust/10 border border-pasada-rust/20 px-4 py-3">
-            <Zap size={16} className="text-pasada-rust shrink-0" />
-            <p className="text-sm text-pasada-dark">
-              <span className="font-bold text-pasada-rust">{totalWaiting}</span> passengers waiting on route
-            </p>
-          </div>
-        )}
-
-        {/* Departure score */}
-        <DepartureScore
-          score={scoreData?.score ?? null}
-          expectedPassengers={scoreData?.expected_passengers}
-          travelTimeMin={scoreData?.travel_time_min}
-          expectedRevenue={scoreData?.expected_revenue}
-          recommendation={scoreData?.recommendation}
-          onRefresh={onFetchScore}
-        />
-
-        {/* Action buttons */}
-        <div className="flex gap-3 pt-1">
-          <button
-            onClick={onOpenModal}
-            className="flex-1 rounded-xl border-2 border-pasada-border bg-white py-3.5 text-sm font-bold text-pasada-dark hover:bg-pasada-cream transition-colors"
-          >
-            Update Occupancy
-          </button>
-          <button
-            onClick={onStartTrip}
-            className="flex-1 rounded-xl bg-pasada-rust py-3.5 text-sm font-bold text-white hover:bg-pasada-rust/90 transition-colors"
-          >
-            Start New Trip
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Active Trip Map ────────────────────────────────────────────────────────────
-
-function ActiveTripTab({ driver, mapCenter, polyline, totalWaiting, occCount, occHex, route, scoreData, scoreLoading, onFetchScore, onEndTrip, onOpenModal }) {
+function MapHomeTab({ driver, mapCenter, polyline, tripActive, totalWaiting, occCount, occHex, route, scoreData, scoreLoading, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
   const markerIcon = MAPS_API_KEY
     ? {
         path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
@@ -287,13 +184,13 @@ function ActiveTripTab({ driver, mapCenter, polyline, totalWaiting, occCount, oc
 
   return (
     <div className="relative flex-1 overflow-hidden">
-      {/* Map */}
+      {/* Full-screen map */}
       <div className="absolute inset-0">
         {MAPS_API_KEY ? (
           <GoogleMap
             mapContainerStyle={{ width: "100%", height: "100%" }}
             center={mapCenter}
-            zoom={15}
+            zoom={14}
             options={WARM_MAP_OPTIONS}
           >
             {driver.lat && (
@@ -302,7 +199,7 @@ function ActiveTripTab({ driver, mapCenter, polyline, totalWaiting, occCount, oc
             {polyline.length > 1 && (
               <Polyline
                 path={polyline.map(([lat, lng]) => ({ lat, lng }))}
-                options={{ strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: 0.8 }}
+                options={{ strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: tripActive ? 0.9 : 0.4 }}
               />
             )}
           </GoogleMap>
@@ -315,20 +212,28 @@ function ActiveTripTab({ driver, mapCenter, polyline, totalWaiting, occCount, oc
         )}
       </div>
 
-      {/* IN TRANSIT badge */}
+      {/* Status badge */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
-        <div className="flex items-center gap-1.5 rounded-full bg-white/90 shadow-lg border border-pasada-border px-4 py-1.5">
-          <span className="size-2 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-xs font-bold text-pasada-dark uppercase tracking-wide">In Transit</span>
-        </div>
+        {tripActive ? (
+          <div className="flex items-center gap-1.5 rounded-full bg-white/90 shadow-lg border border-pasada-border px-4 py-1.5">
+            <span className="size-2 rounded-full bg-green-500 animate-pulse" />
+            <span className="text-xs font-bold text-pasada-dark uppercase tracking-wide">In Transit</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 rounded-full bg-white/90 shadow-lg border border-pasada-border px-4 py-1.5">
+            <span className="size-2 rounded-full bg-yellow-400" />
+            <span className="text-xs font-bold text-pasada-dark uppercase tracking-wide">
+              {driver.driver_name ?? "Driver"} · {driver.plate ?? "ABC 1234"}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Bottom overlay */}
       <div
         className="absolute bottom-0 inset-x-0 z-10"
         style={{
-          background:
-            "linear-gradient(to top, rgba(250,245,238,1) 0%, rgba(250,245,238,0.97) 55%, rgba(250,245,238,0) 100%)",
+          background: "linear-gradient(to top, rgba(250,245,238,1) 0%, rgba(250,245,238,0.97) 55%, rgba(250,245,238,0) 100%)",
           paddingTop: "80px",
         }}
       >
@@ -365,12 +270,21 @@ function ActiveTripTab({ driver, mapCenter, polyline, totalWaiting, occCount, oc
           >
             Update Occupancy
           </button>
-          <button
-            onClick={onEndTrip}
-            className="flex-1 rounded-xl bg-red-600 py-3.5 text-sm font-bold text-white hover:bg-red-700 transition-colors"
-          >
-            End Trip
-          </button>
+          {tripActive ? (
+            <button
+              onClick={onEndTrip}
+              className="flex-1 rounded-xl bg-red-600 py-3.5 text-sm font-bold text-white hover:bg-red-700 transition-colors"
+            >
+              End Trip
+            </button>
+          ) : (
+            <button
+              onClick={onStartTrip}
+              className="flex-1 rounded-xl bg-pasada-rust py-3.5 text-sm font-bold text-white hover:bg-pasada-rust/90 transition-colors"
+            >
+              Start Trip
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -521,50 +435,6 @@ function EarningsTab() {
             </div>
           ))}
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Alerts Tab ────────────────────────────────────────────────────────────────
-
-function AlertsTab({ totalWaiting }) {
-  const alerts = [
-    { id: 1, type: "demand",  title: "High Demand Alert",     body: `${totalWaiting} passengers waiting on route R01.`,   time: "Just now" },
-    { id: 2, type: "info",    title: "Peak Hours Approaching", body: "Expected surge between 5–7 PM today.",                time: "1h ago"   },
-    { id: 3, type: "success", title: "Trip Completed",         body: "Trip #4 completed. Fare: ₱234. 18 passengers.",      time: "2h ago"   },
-  ];
-
-  const typeStyle = {
-    demand:  { bg: "bg-red-50",    dot: "bg-red-500",   text: "text-red-700"   },
-    info:    { bg: "bg-blue-50",   dot: "bg-blue-500",  text: "text-blue-700"  },
-    success: { bg: "bg-green-50",  dot: "bg-green-500", text: "text-green-700" },
-  };
-
-  return (
-    <div className="flex-1 overflow-y-auto bg-pasada-cream">
-      <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-4">
-        <h1 className="font-garamond text-3xl font-bold text-pasada-dark">Alerts</h1>
-      </div>
-
-      <div className="px-4 py-4 space-y-3">
-        {alerts.map((a) => {
-          const s = typeStyle[a.type];
-          return (
-            <div key={a.id} className={`rounded-2xl ${s.bg} border border-pasada-border p-4`}>
-              <div className="flex items-start gap-3">
-                <span className={`mt-1 size-2.5 shrink-0 rounded-full ${s.dot}`} />
-                <div className="flex-1">
-                  <div className="flex items-center justify-between">
-                    <p className={`text-sm font-bold ${s.text}`}>{a.title}</p>
-                    <p className="text-[10px] text-pasada-muted">{a.time}</p>
-                  </div>
-                  <p className="text-sm text-pasada-warm mt-0.5">{a.body}</p>
-                </div>
-              </div>
-            </div>
-          );
-        })}
       </div>
     </div>
   );

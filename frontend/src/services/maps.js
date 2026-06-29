@@ -1,5 +1,5 @@
 export const MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-export const LIBRARIES = ["places"];
+export const LIBRARIES = [];
 
 // Route center: Lumban, Laguna
 export const DEFAULT_CENTER = { lat: 14.2976, lng: 121.475 };
