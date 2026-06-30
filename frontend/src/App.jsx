@@ -20,9 +20,8 @@ export default function App() {
     <Routes>
       <Route path="/"                  element={<RoleSelect />} />
       <Route path="/login"             element={<Navigate to="/" replace />} />
-      <Route path="/login/passenger"   element={<PassengerAdminLogin />} />
-      <Route path="/login/admin"       element={<PassengerAdminLogin />} />
       <Route path="/login/driver"      element={<DriverLoginPage />} />
+      <Route path="/login/:role"       element={<PassengerAdminLogin />} />
 
       <Route
         path="/passenger"
