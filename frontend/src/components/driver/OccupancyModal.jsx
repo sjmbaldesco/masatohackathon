@@ -18,7 +18,7 @@ function occupancyStatusLabel(pct) {
 
 function occupancyRingColor(pct) {
   if (pct >= 85) return "#D32F2F";
-  if (pct >= 50) return "#C2652A";
+  if (pct >= 50) return "#EF233C";
   return "#388E3C";
 }
 

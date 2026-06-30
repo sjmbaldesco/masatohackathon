@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { GoogleMap, Marker, InfoWindow, Polyline } from "@react-google-maps/api";
+import { useState, useMemo } from "react";
+import { GoogleMap, Marker, InfoWindow, Polyline, HeatmapLayer } from "@react-google-maps/api";
 import {
   LayoutDashboard, Activity, Truck, Users, Map,
   UserCheck, BarChart2, Settings, Bus, LogOut,
@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useCollection } from "../hooks/useFirestore";
-import { DEFAULT_CENTER, MAPS_API_KEY, occupancyColor } from "../services/maps";
+import { DEFAULT_CENTER, MAPS_API_KEY, occupancyColor, GRAY_MAP_STYLE } from "../services/maps";
 import KPICards from "../components/cooperative/KPICards";
 import AIInsights from "../components/cooperative/AIInsights";
 
@@ -27,14 +27,7 @@ const NAV = [
 const MAP_OPTIONS = {
   disableDefaultUI: false,
   zoomControl: true,
-  styles: [
-    { elementType: "geometry",           stylers: [{ color: "#f0e8da" }] },
-    { elementType: "labels.text.fill",   stylers: [{ color: "#7a5c42" }] },
-    { featureType: "road", elementType: "geometry",  stylers: [{ color: "#ffffff" }] },
-    { featureType: "water", elementType: "geometry", stylers: [{ color: "#bdd5e0" }] },
-    { featureType: "poi",     stylers: [{ visibility: "off" }] },
-    { featureType: "transit", stylers: [{ visibility: "off" }] },
-  ],
+  styles: GRAY_MAP_STYLE,
 };
 
 export default function AdminDashboard() {
@@ -80,7 +73,7 @@ export default function AdminDashboard() {
           <div>
             <p className="font-garamond text-xl font-bold text-pasada-dark leading-tight">Pasada</p>
             <p className="text-[9px] font-semibold tracking-[0.15em] uppercase text-pasada-muted">
-              Transport Ops
+              Smart Jeepney Network
             </p>
           </div>
         </div>
@@ -121,9 +114,17 @@ export default function AdminDashboard() {
         </div>
       </aside>
 
-      {/* Main content */}
-      <main className="flex-1 overflow-y-auto">
-        {content[active]}
+      {/* Main content — all tabs stay mounted; inactive ones are hidden to keep GoogleMap alive */}
+      <main className="flex-1 overflow-hidden relative">
+        {Object.entries(content).map(([id, node]) => (
+          <div
+            key={id}
+            className="absolute inset-0 overflow-y-auto"
+            style={{ visibility: active === id ? "visible" : "hidden" }}
+          >
+            {node}
+          </div>
+        ))}
       </main>
     </div>
   );
@@ -268,14 +269,13 @@ function LiveOpsPage({ drivers, passengers, routes = [] }) {
     anchor: { x: 12, y: 22 },
   } : undefined;
 
-  const passengerIcon = MAPS_API_KEY ? {
-    path: "M -6,0 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0",
-    fillColor: "#2563eb",
-    fillOpacity: 0.85,
-    strokeColor: "#fff",
-    strokeWeight: 2,
-    scale: 1,
-  } : undefined;
+  const heatmapData = useMemo(() => {
+    if (!window.google?.maps) return [];
+    return waitingPassengers.map((p) => ({
+      location: new window.google.maps.LatLng(p.lat, p.lng),
+      weight: 1,
+    }));
+  }, [waitingPassengers.length]);
 
   return (
     <div className="p-8 space-y-4">
@@ -298,18 +298,17 @@ function LiveOpsPage({ drivers, passengers, routes = [] }) {
               {routePolyline.length > 1 && (
                 <Polyline
                   path={routePolyline}
-                  options={{ strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: 0.65 }}
+                  options={{ strokeColor: "#EF233C", strokeWeight: 4, strokeOpacity: 0.65 }}
                 />
               )}
 
-              {/* Waiting passenger markers (blue dots) */}
-              {waitingPassengers.map((p) => (
-                <Marker
-                  key={p.id}
-                  position={{ lat: p.lat, lng: p.lng }}
-                  icon={passengerIcon}
+              {/* Passenger demand heatmap */}
+              {heatmapData.length > 0 && (
+                <HeatmapLayer
+                  data={heatmapData}
+                  options={{ radius: 30, opacity: 0.7 }}
                 />
-              ))}
+              )}
 
               {/* Driver/jeep markers — colored by occupancy */}
               {activeDrivers.map((d) => {
@@ -363,10 +362,10 @@ function LiveOpsPage({ drivers, passengers, routes = [] }) {
 
           {/* Waiting passengers summary */}
           {waitingPassengers.length > 0 && (
-            <div className="rounded-xl bg-blue-50 border border-blue-100 px-3 py-2 flex items-center gap-2">
-              <span className="size-2.5 rounded-full bg-blue-500 shrink-0" />
-              <span className="text-xs text-blue-700 font-semibold">
-                {waitingPassengers.length} passenger{waitingPassengers.length !== 1 ? "s" : ""} waiting on route
+            <div className="rounded-xl bg-pasada-rust/5 border border-pasada-rust/20 px-3 py-2 flex items-center gap-2">
+              <span className="size-2.5 rounded-full bg-pasada-rust shrink-0" />
+              <span className="text-xs text-pasada-rust font-semibold">
+                {waitingPassengers.length} passenger{waitingPassengers.length !== 1 ? "s" : ""} waiting — heatmap shown
               </span>
             </div>
           )}
@@ -829,7 +828,7 @@ function DemandPage({ stops, passengers }) {
             {stopDemand.length > 0 ? stopDemand.map((s, i) => {
               const max = Math.max(...stopDemand.map((x) => x.count), 1);
               const pct = Math.round((s.count / max) * 100);
-              const color = pct > 70 ? "#D32F2F" : pct > 40 ? "#C2652A" : "#388E3C";
+              const color = pct > 70 ? "#D90429" : pct > 40 ? "#EF233C" : "#388E3C";
               return (
                 <tr key={i} className="hover:bg-pasada-cream/30 transition-colors">
                   <td className="px-5 py-4">

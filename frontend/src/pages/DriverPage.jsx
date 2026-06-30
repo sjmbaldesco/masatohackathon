@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { GoogleMap, OverlayView, Polyline } from "@react-google-maps/api";
+import { GoogleMap, OverlayView, Polyline, HeatmapLayer } from "@react-google-maps/api";
 import {
   Home, Navigation, DollarSign, MoreHorizontal,
   MapPin, Gauge, Users, Zap, ChevronRight, LogOut,
@@ -14,7 +14,7 @@ import TabBar from "../components/shared/TabBar";
 import DepartureScore from "../components/driver/DepartureScore";
 import OccupancyModal from "../components/driver/OccupancyModal";
 import { startSim, stopSim } from "../services/sim";
-import { DEFAULT_CENTER, DEMO_POLYLINE, MAPS_API_KEY, occupancyColor } from "../services/maps";
+import { DEFAULT_CENTER, DEMO_POLYLINE, MAPS_API_KEY, GRAY_MAP_STYLE, ROUTE_STOPS, occupancyColor } from "../services/maps";
 
 const CAPACITY = 18;
 const ROUTE_ID = "R01";
@@ -26,19 +26,22 @@ const TABS = [
   { id: "more",     label: "MORE",     icon: MoreHorizontal },
 ];
 
-const WARM_MAP_OPTIONS = {
+const MAP_OPTIONS = {
   disableDefaultUI: true,
-  styles: [
-    { elementType: "geometry",            stylers: [{ color: "#f0e8da" }] },
-    { elementType: "labels.text.fill",    stylers: [{ color: "#7a5c42" }] },
-    { elementType: "labels.text.stroke",  stylers: [{ color: "#f0e8da" }] },
-    { featureType: "road", elementType: "geometry",         stylers: [{ color: "#ffffff" }] },
-    { featureType: "road.arterial", elementType: "geometry", stylers: [{ color: "#ffe8cc" }] },
-    { featureType: "water", elementType: "geometry",        stylers: [{ color: "#bdd5e0" }] },
-    { featureType: "poi",     stylers: [{ visibility: "off" }] },
-    { featureType: "transit", stylers: [{ visibility: "off" }] },
-  ],
+  rotateControl: false,
+  styles: GRAY_MAP_STYLE,
 };
+
+// Compute compass heading from point p1 to p2
+function bearing(p1, p2) {
+  const toR = (d) => (d * Math.PI) / 180;
+  const [lat1, lng1] = Array.isArray(p1) ? p1 : [p1.lat, p1.lng];
+  const [lat2, lng2] = Array.isArray(p2) ? p2 : [p2.lat, p2.lng];
+  const dLng = toR(lng2 - lng1);
+  const y = Math.sin(dLng) * Math.cos(toR(lat2));
+  const x = Math.cos(toR(lat1)) * Math.sin(toR(lat2)) - Math.sin(toR(lat1)) * Math.cos(toR(lat2)) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
 
 export default function DriverPage() {
   const { user, logout } = useAuth();
@@ -46,6 +49,7 @@ export default function DriverPage() {
   const [showModal, setShowModal] = useState(false);
   const [scoreData, setScoreData] = useState(null);
   const [scoreLoading, setScoreLoading] = useState(false);
+  const mapRef = useRef(null);
 
   const { data: driverDocs } = useCollection("drivers", [["uid", "==", user?.uid ?? "__none__"]]);
   const driver = driverDocs?.[0] ?? {};
@@ -84,10 +88,23 @@ export default function DriverPage() {
   async function handleStartTrip() {
     await setDoc(
       doc(db, "drivers", user.uid),
-      { status: "in_transit", last_updated: serverTimestamp() },
+      {
+        status: "in_transit",
+        lat: ROUTE_STOPS[0].lat,
+        lng: ROUTE_STOPS[0].lng,
+        current_stop: ROUTE_STOPS[0].name,
+        last_updated: serverTimestamp(),
+      },
       { merge: true }
     );
-    startSim(user.uid, polyline, 30);
+    // Orient map toward the start of the route
+    if (mapRef.current && polyline.length >= 2) {
+      const h = bearing(polyline[0], polyline[1]);
+      mapRef.current.setHeading(h);
+      mapRef.current.setZoom(15);
+      mapRef.current.panTo({ lat: ROUTE_STOPS[0].lat, lng: ROUTE_STOPS[0].lng });
+    }
+    startSim(user.uid, polyline, 50);
   }
 
   async function handleEndTrip() {
@@ -127,6 +144,7 @@ export default function DriverPage() {
         <MapHomeTab
           driver={driver}
           mapCenter={mapCenter}
+          mapRef={mapRef}
           polyline={polyline}
           tripActive={tripActive}
           totalWaiting={totalWaiting}
@@ -169,7 +187,7 @@ function StopMarker({ name, count }) {
       {/* Count badge — only shown when passengers are waiting */}
       {hasWaiting && (
         <div style={{
-          background: "#C2652A",
+          background: "#EF233C",
           color: "#fff",
           fontSize: 10,
           fontWeight: 700,
@@ -188,7 +206,7 @@ function StopMarker({ name, count }) {
         width: 10,
         height: 10,
         borderRadius: "50%",
-        background: hasWaiting ? "#C2652A" : "#9A9088",
+        background: hasWaiting ? "#EF233C" : "#8D99AE",
         border: "2px solid #fff",
         boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
       }} />
@@ -217,7 +235,7 @@ function JeepneyMarker() {
       <polygon points="10,3 8.5,6 11.5,6" fill="#FFD700" />
 
       {/* ── Main body ── */}
-      <rect x="2" y="10" width="76" height="24" rx="2" fill="#C2652A" />
+      <rect x="2" y="10" width="76" height="24" rx="2" fill="#EF233C" />
 
       {/* ── Chrome front grill (iconic horizontal bars) ── */}
       <rect x="2" y="10" width="16" height="24" rx="2" fill="#9E3D10" />
@@ -276,30 +294,37 @@ function JeepneyMarker() {
 
 // ── Map Home Tab (always shows map) ───────────────────────────────────────────
 
-function MapHomeTab({ driver, mapCenter, polyline, tripActive, totalWaiting, stops, occCount, occHex, route, scoreData, scoreLoading, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
-  const mapRef = useRef(null);
-
+function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWaiting, stops, occCount, occHex, route, scoreData, scoreLoading, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
+  // Auto-pan as driver moves
   useEffect(() => {
     if (!mapRef.current || !driver.lat || !driver.lng) return;
     mapRef.current.panTo({ lat: driver.lat, lng: driver.lng });
   }, [driver.lat, driver.lng]);
 
-  // Memoize so @react-google-maps/api doesn't call setPath every sim tick
   const polylinePath = useMemo(
     () => polyline.map((p) => Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }),
     [polyline]
   );
 
-  // Memoize so setOptions only fires when tripActive actually changes
   const polylineOptions = useMemo(
-    () => ({ strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: tripActive ? 0.9 : 0.5 }),
+    () => ({ strokeColor: "#EF233C", strokeWeight: 5, strokeOpacity: tripActive ? 1 : 0.4 }),
     [tripActive]
   );
 
-  const jeepPixelOffset = useMemo(
-    () => (w, h) => ({ x: -(w / 2), y: -(h - 4) }),
-    []
-  );
+  const jeepPixelOffset = useMemo(() => (w, h) => ({ x: -(w / 2), y: -(h - 4) }), []);
+
+  // Heatmap data: stops weighted by waiting passenger count
+  const heatmapData = useMemo(() => {
+    if (!window.google?.maps) return [];
+    return stops
+      .filter((s) => s.lat && s.lng)
+      .map((s) => ({
+        location: new window.google.maps.LatLng(s.lat, s.lng),
+        weight: Math.max(s.count ?? 0, 0.1),
+      }));
+  }, [stops]);
+
+  const lumban = ROUTE_STOPS[0];
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -308,11 +333,34 @@ function MapHomeTab({ driver, mapCenter, polyline, tripActive, totalWaiting, sto
         {MAPS_API_KEY ? (
           <GoogleMap
             mapContainerStyle={{ width: "100%", height: "100%" }}
-            center={DEFAULT_CENTER}
+            center={{ lat: lumban.lat, lng: lumban.lng }}
             zoom={14}
-            options={WARM_MAP_OPTIONS}
+            options={MAP_OPTIONS}
             onLoad={(map) => { mapRef.current = map; }}
           >
+            {/* Route polyline — always visible, brighter when in transit */}
+            {polylinePath.length > 1 && (
+              <Polyline path={polylinePath} options={polylineOptions} />
+            )}
+
+            {/* Demand heatmap at stops */}
+            {heatmapData.length > 0 && (
+              <HeatmapLayer
+                data={heatmapData}
+                options={{
+                  radius: 35,
+                  opacity: 0.75,
+                  gradient: [
+                    "rgba(237,242,244,0)",
+                    "rgba(141,153,174,0.6)",
+                    "rgba(239,35,60,0.7)",
+                    "rgba(217,4,41,0.9)",
+                  ],
+                }}
+              />
+            )}
+
+            {/* Jeepney marker */}
             {driver.lat && (
               <OverlayView
                 position={{ lat: driver.lat, lng: driver.lng }}
@@ -322,22 +370,9 @@ function MapHomeTab({ driver, mapCenter, polyline, tripActive, totalWaiting, sto
                 <JeepneyMarker />
               </OverlayView>
             )}
-            {stops.map((stop) => stop.lat && (
-              <OverlayView
-                key={stop.id}
-                position={{ lat: stop.lat, lng: stop.lng }}
-                mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
-                getPixelPositionOffset={(w, h) => ({ x: -(w / 2), y: -h })}
-              >
-                <StopMarker name={stop.stop || stop.name} count={stop.count ?? 0} />
-              </OverlayView>
-            ))}
-            {polylinePath.length > 1 && (
-              <Polyline path={polylinePath} options={polylineOptions} />
-            )}
           </GoogleMap>
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-[#f0e8da]">
+          <div className="w-full h-full flex items-center justify-center bg-[#edf2f4]">
             <p className="text-pasada-warm text-sm text-center px-6">
               Add VITE_GOOGLE_MAPS_API_KEY to .env to show map
             </p>

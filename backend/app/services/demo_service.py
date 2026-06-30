@@ -164,8 +164,9 @@ def seed_demo(route_id: str) -> dict:
 async def run_demo(route_id: str) -> None:
     polyline, stops = _get_route_data(route_id)
 
-    SPEED_KMH = 30
-    STEP_KM = SPEED_KMH / 3600  # km advanced per 1-second tick
+    SPEED_KMH = 50
+    TICK_S = 0.5
+    STEP_KM = SPEED_KMH / 3600 * TICK_S  # km advanced per tick
 
     # Initialise per-driver state from current Firestore positions
     states: dict[str, dict] = {}
@@ -230,7 +231,7 @@ async def run_demo(route_id: str) -> None:
                     },
                 )
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(TICK_S)
 
     except asyncio.CancelledError:
         # Freeze jeeps in place when stopped

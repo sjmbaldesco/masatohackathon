@@ -35,7 +35,7 @@ export function startSim(driverId, polyline, speedKmh = 30) {
     return;
   }
 
-  const TICK_MS = 1000;
+  const TICK_MS = 500;
   const degPerTick = (speedKmh / 3600 / 111) * (TICK_MS / 1000);
 
   let segIdx = 0;

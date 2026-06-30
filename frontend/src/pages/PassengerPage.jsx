@@ -1,15 +1,15 @@
 import { useState, useEffect, useRef } from "react";
-import { GoogleMap, Marker, Polyline, DirectionsRenderer } from "@react-google-maps/api";
+import { GoogleMap, Marker, Polyline, DirectionsRenderer, OverlayView } from "@react-google-maps/api";
 import {
   Home, Map, User, LogOut, X, ChevronRight,
-  Clock, Search, MapPin, Bus,
+  Clock, Search, MapPin, Bus, Mic,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useCollection } from "../hooks/useFirestore";
 import { broadcastWaiting, cancelWaiting } from "../services/api";
 import TabBar from "../components/shared/TabBar";
 import {
-  DEFAULT_CENTER, ROUTE_STOPS, DEMO_POLYLINE,
+  DEFAULT_CENTER, ROUTE_STOPS, DEMO_POLYLINE, GRAY_MAP_STYLE,
   MAPS_API_KEY, etaMinutes, occupancyColor, occupancyLabel,
 } from "../services/maps";
 
@@ -22,19 +22,7 @@ const TABS = [
   { id: "profile", label: "PROFILE", icon: User },
 ];
 
-const WARM_MAP_OPTIONS = {
-  disableDefaultUI: true,
-  styles: [
-    { elementType: "geometry",           stylers: [{ color: "#f0e8da" }] },
-    { elementType: "labels.text.fill",   stylers: [{ color: "#7a5c42" }] },
-    { elementType: "labels.text.stroke", stylers: [{ color: "#f0e8da" }] },
-    { featureType: "road", elementType: "geometry",          stylers: [{ color: "#ffffff" }] },
-    { featureType: "road.arterial", elementType: "geometry", stylers: [{ color: "#ffe8cc" }] },
-    { featureType: "water", elementType: "geometry",         stylers: [{ color: "#bdd5e0" }] },
-    { featureType: "poi",     stylers: [{ visibility: "off" }] },
-    { featureType: "transit", stylers: [{ visibility: "off" }] },
-  ],
-};
+const MAP_OPTIONS = { disableDefaultUI: true, styles: GRAY_MAP_STYLE };
 
 export default function PassengerPage() {
   const { user, logout } = useAuth();
@@ -169,14 +157,9 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
 
   const jeepIcon = MAPS_API_KEY ? {
     path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
-    fillColor: "#C2652A", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2, scale: 1.4,
+    fillColor: "#EF233C", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2, scale: 1.4,
     anchor: { x: 12, y: 22 },
   } : undefined;
-
-  const userIcon = {
-    path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
-    fillColor: "#2563eb", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 3, scale: 0.85,
-  };
 
   const jeepStopIdx  = ROUTE_STOPS.findIndex((s) => s.name === nearestJeep?.current_stop);
   const jeepRoutePct = jeepStopIdx >= 0 ? jeepStopIdx / (ROUTE_STOPS.length - 1) : etaProgress;
@@ -219,11 +202,11 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
             mapContainerStyle={{ width: "100%", height: "100%" }}
             center={mapCenter}
             zoom={14}
-            options={WARM_MAP_OPTIONS}
+            options={MAP_OPTIONS}
             onLoad={(map) => { mapRef.current = map; }}
           >
-            {/* User location — blue dot */}
-            {userLocation && <Marker position={userLocation} icon={userIcon} />}
+            {/* User location — person icon */}
+            {userLocation && <PersonMarker position={userLocation} />}
 
             {/* Directions route (real roads) or fallback demo polyline */}
             {directions ? (
@@ -231,13 +214,13 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
                 directions={directions}
                 options={{
                   suppressMarkers: true,
-                  polylineOptions: { strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: 0.75 },
+                  polylineOptions: { strokeColor: "#EF233C", strokeWeight: 4, strokeOpacity: 0.75 },
                 }}
               />
             ) : (
               <Polyline
                 path={DEMO_POLYLINE.map(([lat, lng]) => ({ lat, lng }))}
-                options={{ strokeColor: "#C2652A", strokeWeight: 3, strokeOpacity: 0.6 }}
+                options={{ strokeColor: "#EF233C", strokeWeight: 3, strokeOpacity: 0.6 }}
               />
             )}
 
@@ -248,7 +231,7 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
                 position={{ lat: stop.lat, lng: stop.lng }}
                 icon={{
                   path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
-                  fillColor: selectedStop?.id === stop.id ? "#C2652A" : "#9A9088",
+                  fillColor: selectedStop?.id === stop.id ? "#EF233C" : "#8D99AE",
                   fillOpacity: 1,
                   strokeColor: "#fff",
                   strokeWeight: 2,
@@ -265,7 +248,7 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
                 position={{ lat: jeep.lat, lng: jeep.lng }}
                 icon={{
                   ...jeepIcon,
-                  fillColor: jeep.uid === nearestJeep?.uid ? "#C2652A" : "#B0886A",
+                  fillColor: jeep.uid === nearestJeep?.uid ? "#EF233C" : "#8D99AE",
                   scale: jeep.uid === nearestJeep?.uid ? 1.4 : 1.1,
                 }}
               />
@@ -299,6 +282,9 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
                 <X size={14} className="text-pasada-muted" />
               </button>
             )}
+            <button className="text-pasada-muted/60">
+              <Mic size={15} />
+            </button>
           </div>
 
           {searchOpen && (
@@ -377,25 +363,6 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
                     <Bus size={13} className="text-white" />
                   </div>
                 </div>
-              </div>
-              {/* Labels: only first, selected, and last to avoid clutter */}
-              <div className="flex justify-between mt-1.5">
-                {ROUTE_STOPS.map((stop, i) => {
-                  const isFirst    = i === 0;
-                  const isLast     = i === ROUTE_STOPS.length - 1;
-                  const isSelected = stop.id === selectedStop?.id;
-                  if (!isFirst && !isLast && !isSelected) return <span key={stop.id} />;
-                  return (
-                    <span
-                      key={stop.id}
-                      className={`text-[9px] leading-tight truncate max-w-[60px] ${
-                        isSelected ? "font-bold text-pasada-dark" : "text-pasada-muted"
-                      }`}
-                    >
-                      {stop.name.split(" ")[0]}
-                    </span>
-                  );
-                })}
               </div>
             </div>
 
@@ -498,14 +465,9 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
 
   const jeepIcon = MAPS_API_KEY ? {
     path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
-    fillColor: "#C2652A", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2, scale: 1.4,
+    fillColor: "#EF233C", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2, scale: 1.4,
     anchor: { x: 12, y: 22 },
   } : undefined;
-
-  const userIcon = {
-    path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
-    fillColor: "#2563eb", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 3, scale: 0.85,
-  };
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -534,7 +496,7 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
           mapContainerStyle={{ width: "100%", height: "100%" }}
           center={selectedStop ? { lat: selectedStop.lat, lng: selectedStop.lng } : DEFAULT_CENTER}
           zoom={13}
-          options={WARM_MAP_OPTIONS}
+          options={MAP_OPTIONS}
           onLoad={(map) => { mapRef.current = map; }}
         >
           {/* Real road route from Directions API, fallback to demo polyline */}
@@ -543,13 +505,13 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
               directions={routeDirections}
               options={{
                 suppressMarkers: true,
-                polylineOptions: { strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: 0.7 },
+                polylineOptions: { strokeColor: "#EF233C", strokeWeight: 4, strokeOpacity: 0.7 },
               }}
             />
           ) : (
             <Polyline
               path={DEMO_POLYLINE.map(([lat, lng]) => ({ lat, lng }))}
-              options={{ strokeColor: "#C2652A", strokeWeight: 3, strokeOpacity: 0.55 }}
+              options={{ strokeColor: "#EF233C", strokeWeight: 3, strokeOpacity: 0.55 }}
             />
           )}
 
@@ -561,8 +523,8 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
               icon={{
                 path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
                 fillColor: selectedStop?.id === stop.id
-                  ? "#C2652A"
-                  : tappedStop?.id === stop.id ? "#3A302A" : "#9A9088",
+                  ? "#EF233C"
+                  : tappedStop?.id === stop.id ? "#2B2D42" : "#8D99AE",
                 fillOpacity: 1,
                 strokeColor: "#fff",
                 strokeWeight: 2,
@@ -582,14 +544,14 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
               position={{ lat: jeep.lat, lng: jeep.lng }}
               icon={{
                 ...jeepIcon,
-                fillColor: jeep.uid === nearestJeep?.uid ? "#C2652A" : "#B0886A",
+                fillColor: jeep.uid === nearestJeep?.uid ? "#EF233C" : "#8D99AE",
                 scale: jeep.uid === nearestJeep?.uid ? 1.4 : 1.1,
               }}
             />
           ))}
 
-          {/* User location */}
-          {userLocation && <Marker position={userLocation} icon={userIcon} />}
+          {/* User location — person icon */}
+          {userLocation && <PersonMarker position={userLocation} />}
         </GoogleMap>
       ) : (
         <div className="flex-1 h-full bg-[#f0e8da] flex items-center justify-center">
@@ -632,6 +594,22 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
         </div>
       )}
     </div>
+  );
+}
+
+// ── Person Marker Overlay ─────────────────────────────────────────────────────
+
+function PersonMarker({ position }) {
+  return (
+    <OverlayView
+      position={position}
+      mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+      getPixelPositionOffset={(w, h) => ({ x: -w / 2, y: -h / 2 })}
+    >
+      <div className="flex size-9 items-center justify-center rounded-full bg-[#2563eb] border-2 border-white shadow-md">
+        <User size={16} className="text-white" />
+      </div>
+    </OverlayView>
   );
 }
 

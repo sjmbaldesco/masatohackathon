@@ -9,7 +9,7 @@ const ROLES = [
     label: "Driver",
     icon: Bus,
     description: "Sign in with your Driver ID and PIN",
-    color: "#C2652A",
+    color: "#EF233C",
     loginPath: "/login/driver",
   },
   {
@@ -17,7 +17,7 @@ const ROLES = [
     label: "Passenger",
     icon: User,
     description: "Sign in with email or Google",
-    color: "#2E7D85",
+    color: "#2B2D42",
     loginPath: "/login/passenger",
   },
   {
@@ -25,7 +25,7 @@ const ROLES = [
     label: "Admin / Cooperative",
     icon: LayoutDashboard,
     description: "Sign in with email or Google",
-    color: "#5C4A3A",
+    color: "#8D99AE",
     loginPath: "/login/admin",
   },
 ];
@@ -59,7 +59,7 @@ export default function RoleSelect() {
               Pasada
             </h1>
             <p className="mt-0.5 text-[11px] font-semibold tracking-[0.18em] uppercase text-pasada-muted">
-              Transport Ops
+              Smart Jeepney Network
             </p>
           </div>
         </div>

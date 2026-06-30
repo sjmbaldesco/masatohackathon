@@ -14,7 +14,7 @@ const driverIcon = L.divIcon({
   ">
     <div style="
       width:32px;height:32px;
-      background:#C2652A;
+      background:#EF233C;
       border:2.5px solid white;
       border-radius:50%;
       display:flex;align-items:center;justify-content:center;

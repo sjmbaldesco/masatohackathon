@@ -1,5 +1,17 @@
 export const MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-export const LIBRARIES = [];
+export const LIBRARIES = ["visualization"];
+
+// Shared gray map style matching the 2B2D42/8D99AE/EDF2F4 palette
+export const GRAY_MAP_STYLE = [
+  { elementType: "geometry",           stylers: [{ color: "#edf2f4" }] },
+  { elementType: "labels.text.fill",   stylers: [{ color: "#2b2d42" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#edf2f4" }] },
+  { featureType: "road", elementType: "geometry",          stylers: [{ color: "#ffffff" }] },
+  { featureType: "road.arterial", elementType: "geometry", stylers: [{ color: "#f0f4f8" }] },
+  { featureType: "water", elementType: "geometry",         stylers: [{ color: "#adb8c7" }] },
+  { featureType: "poi",     stylers: [{ visibility: "off" }] },
+  { featureType: "transit", stylers: [{ visibility: "off" }] },
+];
 
 // Route center: midpoint of Lumban → Sta. Cruz via Pagsanjan
 export const DEFAULT_CENTER = { lat: 14.2780, lng: 121.4390 };
