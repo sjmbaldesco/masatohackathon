@@ -340,7 +340,7 @@ function LiveOpsPage({ drivers, passengers, routes = [] }) {
               )}
             </GoogleMap>
           ) : (
-            <div className="w-full h-full bg-[#f0e8da] flex items-center justify-center">
+            <div className="w-full h-full bg-pasada-cream flex items-center justify-center">
               <p className="text-pasada-warm text-sm">Add VITE_GOOGLE_MAPS_API_KEY to show map</p>
             </div>
           )}
@@ -754,7 +754,7 @@ function RoutesPage({ routes, stops, passengers }) {
                 options={{ ...MAP_OPTIONS, disableDefaultUI: true }}
               />
             ) : (
-              <div className="w-full h-full bg-[#f0e8da] flex items-center justify-center">
+              <div className="w-full h-full bg-pasada-cream flex items-center justify-center">
                 <p className="text-pasada-muted text-xs">Live Traffic Overview</p>
               </div>
             )}

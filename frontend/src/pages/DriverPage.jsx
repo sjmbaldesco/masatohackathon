@@ -372,7 +372,7 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
             )}
           </GoogleMap>
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-[#edf2f4]">
+          <div className="w-full h-full flex items-center justify-center bg-pasada-cream">
             <p className="text-pasada-warm text-sm text-center px-6">
               Add VITE_GOOGLE_MAPS_API_KEY to .env to show map
             </p>

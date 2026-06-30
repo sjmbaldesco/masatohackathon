@@ -68,7 +68,7 @@ export default function OccupancyModal({ capacity = 18, currentCount = 0, onSave
               <circle
                 cx="60" cy="60" r={r}
                 fill="none"
-                stroke="#F0E8DC"
+                stroke="#EDF2F4"
                 strokeWidth="10"
               />
               {/* Progress */}

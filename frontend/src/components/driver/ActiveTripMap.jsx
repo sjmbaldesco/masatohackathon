@@ -43,7 +43,7 @@ function TripHeader({ routeLabel, onMenuOpen, onChatOpen }) {
     <header className="absolute left-0 right-0 top-0 z-[1000] flex items-center justify-between px-6 py-4 backdrop-blur-sm bg-pasada-overlay">
       <button
         onClick={onMenuOpen}
-        className="flex size-10 items-center justify-center rounded-full bg-[#f2ece4]"
+        className="flex size-10 items-center justify-center rounded-full bg-pasada-cream"
         aria-label="Menu"
       >
         <Menu size={18} strokeWidth={2} className="text-pasada-dark" />
@@ -114,7 +114,7 @@ function ActionButtons({ onUpdateOccupancy, onEndRoute }) {
     <div className="flex flex-col gap-3">
       <button
         onClick={onUpdateOccupancy}
-        className="flex w-full items-center justify-center gap-2 rounded-xl border border-pasada-border bg-[#e6e0d6] py-[17px] shadow-sm"
+        className="flex w-full items-center justify-center gap-2 rounded-xl border border-pasada-border bg-pasada-cream py-[17px] shadow-sm"
       >
         <UserPlus size={18} strokeWidth={2} className="text-pasada-dark" />
         <span className="font-manrope text-[16px] font-bold text-pasada-dark">
@@ -210,7 +210,7 @@ export default function ActiveTripMap({
           />
           <HUDCard
             icon={Gauge}
-            iconBg="rgba(234,226,218,0.5)"
+            iconBg="rgba(141,153,174,0.15)"
             label="Speed"
             primary={String(speed)}
             secondary=" km/h"

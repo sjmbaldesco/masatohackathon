@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -22,21 +22,30 @@ export function AuthProvider({ children }) {
   const [role,      setRole]      = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [authError, setAuthError] = useState(null);
+  // Tracks whether the first onAuthStateChanged event has fired.
+  // After initialization, role is managed by _persistRole — subsequent
+  // auth events (from signIn calls) must NOT overwrite it by re-reading Firestore.
+  const initializedRef = useRef(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        try {
-          const snap = await getDoc(doc(db, "users", firebaseUser.uid));
-          if (snap.exists()) setRole(snap.data().role ?? null);
-        } catch (err) {
-          console.error("AuthContext Firestore read error:", err);
+        if (!initializedRef.current) {
+          // App init / page reload: restore role from Firestore
+          try {
+            const snap = await getDoc(doc(db, "users", firebaseUser.uid));
+            if (snap.exists()) setRole(snap.data().role ?? null);
+          } catch (err) {
+            console.error("AuthContext Firestore read error:", err);
+          }
         }
+        // Subsequent login events: role already set by _persistRole — leave it alone
         setUser(firebaseUser);
       } else {
         setUser(null);
         setRole(null);
       }
+      initializedRef.current = true;
       setLoading(false);
     });
     return unsubscribe;

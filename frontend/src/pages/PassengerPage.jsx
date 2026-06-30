@@ -255,7 +255,7 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
             ))}
           </GoogleMap>
         ) : (
-          <div className="w-full h-full bg-[#f0e8da] flex items-center justify-center">
+          <div className="w-full h-full bg-[#edf2f4] flex items-center justify-center">
             <p className="text-pasada-warm text-sm text-center px-6">
               Add VITE_GOOGLE_MAPS_API_KEY to show map
             </p>
@@ -554,7 +554,7 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
           {userLocation && <PersonMarker position={userLocation} />}
         </GoogleMap>
       ) : (
-        <div className="flex-1 h-full bg-[#f0e8da] flex items-center justify-center">
+        <div className="flex-1 h-full bg-[#edf2f4] flex items-center justify-center">
           <p className="text-pasada-warm text-sm text-center px-6">
             Add VITE_GOOGLE_MAPS_API_KEY to show map
           </p>
