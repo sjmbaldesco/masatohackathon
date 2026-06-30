@@ -14,10 +14,17 @@ function closestStop(lat, lng, stops = ROUTE_STOPS) {
   return best.name;
 }
 
+// Handles both [[lat, lng]] arrays and [{lat, lng}] objects from Firestore
+function getLatLng(p) {
+  if (Array.isArray(p)) return [p[0], p[1]];
+  return [p.lat, p.lng];
+}
+
 /**
  * Animate a jeep along a polyline and write position to Firestore every second.
+ * Cycles back to the start when it reaches the end of the route.
  * @param {string} driverId - Firestore document ID under drivers/
- * @param {Array<[number,number]>} polyline - [[lat, lng], ...]
+ * @param {Array} polyline - [[lat, lng], ...] or [{lat, lng}, ...] from Firestore
  * @param {number} speedKmh
  */
 export function startSim(driverId, polyline, speedKmh = 30) {
@@ -29,27 +36,21 @@ export function startSim(driverId, polyline, speedKmh = 30) {
   }
 
   const TICK_MS = 1000;
-  // degrees per tick ≈ speedKmh / 3600 km/s / 111 km per degree
   const degPerTick = (speedKmh / 3600 / 111) * (TICK_MS / 1000);
 
   let segIdx = 0;
-  let t = 0; // interpolation [0, 1] within current segment
+  let t = 0;
 
   activeTimers[driverId] = setInterval(async () => {
+    // Loop back to start when reaching the end
     if (segIdx >= polyline.length - 1) {
-      stopSim(driverId);
-      try {
-        await setDoc(
-          doc(db, "drivers", driverId),
-          { status: "idle", speed_kmh: 0, last_updated: serverTimestamp() },
-          { merge: true }
-        );
-      } catch (e) { console.error("sim end write:", e); }
+      segIdx = 0;
+      t = 0;
       return;
     }
 
-    const [lat1, lng1] = polyline[segIdx];
-    const [lat2, lng2] = polyline[segIdx + 1];
+    const [lat1, lng1] = getLatLng(polyline[segIdx]);
+    const [lat2, lng2] = getLatLng(polyline[segIdx + 1]);
     const segLen = Math.hypot(lat2 - lat1, lng2 - lng1);
 
     if (segLen === 0) { segIdx++; return; }
@@ -62,9 +63,10 @@ export function startSim(driverId, polyline, speedKmh = 30) {
       if (segIdx >= polyline.length - 1) return;
     }
 
-    const [s1, s2] = [polyline[segIdx], polyline[segIdx + 1] ?? polyline[segIdx]];
-    const lat = s1[0] + (s2[0] - s1[0]) * t;
-    const lng = s1[1] + (s2[1] - s1[1]) * t;
+    const p1 = getLatLng(polyline[segIdx]);
+    const p2 = getLatLng(polyline[segIdx + 1] ?? polyline[segIdx]);
+    const lat = p1[0] + (p2[0] - p1[0]) * t;
+    const lng = p1[1] + (p2[1] - p1[1]) * t;
     const currentStop = closestStop(lat, lng);
 
     try {

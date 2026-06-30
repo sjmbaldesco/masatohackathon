@@ -60,21 +60,13 @@ export default function DriverPage() {
 
   useEffect(() => {
     if (!user?.uid) return;
+    // Only write structural fields — driver_name/plate come from the seeded Firestore doc
     setDoc(
       doc(db, "drivers", user.uid),
       {
         uid: user.uid,
-        driver_name: "J. Dela Cruz",
-        plate: "ABC 1234",
         route: ROUTE_ID,
         capacity: CAPACITY,
-        occupancy_count: 0,
-        occupancy_pct: 0,
-        speed_kmh: 0,
-        lat: DEFAULT_CENTER.lat,
-        lng: DEFAULT_CENTER.lng,
-        current_stop: "Lumban",
-        status: "idle",
       },
       { merge: true }
     ).catch(console.error);

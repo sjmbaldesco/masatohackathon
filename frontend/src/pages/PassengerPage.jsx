@@ -56,8 +56,16 @@ export default function PassengerPage() {
   }, []);
 
   const { data: drivers } = useCollection("drivers", [["route", "==", ROUTE_ID]]);
-  const activeDrivers     = drivers.filter((d) => d.status !== "ended");
-  const nearestJeep       = activeDrivers[0] ?? null;
+  const activeDrivers     = drivers.filter((d) => d.status !== "ended" && d.lat && d.lng);
+  // Pick the jeep with the smallest ETA to the selected stop
+  const nearestJeep = selectedStop
+    ? activeDrivers.reduce((best, d) => {
+        if (!best) return d;
+        const dEta = etaMinutes({ lat: d.lat, lng: d.lng }, selectedStop, d.speed_kmh || 30);
+        const bEta = etaMinutes({ lat: best.lat, lng: best.lng }, selectedStop, best.speed_kmh || 30);
+        return dEta < bEta ? d : best;
+      }, null)
+    : activeDrivers[0] ?? null;
 
   const currentEta = nearestJeep?.lat && selectedStop
     ? etaMinutes(
@@ -105,6 +113,7 @@ export default function PassengerPage() {
       {activeTab === "home" && (
         <HomeTab
           nearestJeep={nearestJeep}
+          allJeeps={activeDrivers}
           selectedStop={selectedStop}
           onSelectStop={setSelectedStop}
           isWaiting={isWaiting}
@@ -116,7 +125,15 @@ export default function PassengerPage() {
           userLocation={userLocation}
         />
       )}
-      {activeTab === "map"     && <MapTab nearestJeep={nearestJeep} selectedStop={selectedStop} onSelectStop={setSelectedStop} userLocation={userLocation} />}
+      {activeTab === "map" && (
+        <MapTab
+          nearestJeep={nearestJeep}
+          allJeeps={activeDrivers}
+          selectedStop={selectedStop}
+          onSelectStop={setSelectedStop}
+          userLocation={userLocation}
+        />
+      )}
       {activeTab === "profile" && <ProfileTab user={user} onLogout={logout} />}
 
       <TabBar tabs={TABS} active={activeTab} onChange={setActiveTab} />
@@ -134,7 +151,7 @@ export default function PassengerPage() {
 
 // ── Home Tab ──────────────────────────────────────────────────────────────────
 
-function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, onCancel, onShowDetails, currentEta, etaProgress, userLocation }) {
+function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onShowDetails, currentEta, etaProgress, userLocation }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen,  setSearchOpen]  = useState(false);
   const [directions,  setDirections]  = useState(null);
@@ -241,10 +258,18 @@ function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, o
               />
             ))}
 
-            {/* Jeep marker */}
-            {nearestJeep?.lat && (
-              <Marker position={{ lat: nearestJeep.lat, lng: nearestJeep.lng }} icon={jeepIcon} />
-            )}
+            {/* All active jeepney markers */}
+            {allJeeps.map((jeep) => (
+              <Marker
+                key={jeep.uid ?? jeep.id}
+                position={{ lat: jeep.lat, lng: jeep.lng }}
+                icon={{
+                  ...jeepIcon,
+                  fillColor: jeep.uid === nearestJeep?.uid ? "#C2652A" : "#B0886A",
+                  scale: jeep.uid === nearestJeep?.uid ? 1.4 : 1.1,
+                }}
+              />
+            ))}
           </GoogleMap>
         ) : (
           <div className="w-full h-full bg-[#f0e8da] flex items-center justify-center">
@@ -442,7 +467,7 @@ function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, o
 
 // ── Map Tab ───────────────────────────────────────────────────────────────────
 
-function MapTab({ nearestJeep, selectedStop, onSelectStop, userLocation }) {
+function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLocation }) {
   const [tappedStop,      setTappedStop]      = useState(null);
   const [searchQuery,     setSearchQuery]      = useState("");
   const [routeDirections, setRouteDirections]  = useState(null);
@@ -550,13 +575,18 @@ function MapTab({ nearestJeep, selectedStop, onSelectStop, userLocation }) {
             />
           ))}
 
-          {/* Live jeep */}
-          {nearestJeep?.lat && (
+          {/* All active jeepney markers */}
+          {allJeeps.map((jeep) => (
             <Marker
-              position={{ lat: nearestJeep.lat, lng: nearestJeep.lng }}
-              icon={jeepIcon}
+              key={jeep.uid ?? jeep.id}
+              position={{ lat: jeep.lat, lng: jeep.lng }}
+              icon={{
+                ...jeepIcon,
+                fillColor: jeep.uid === nearestJeep?.uid ? "#C2652A" : "#B0886A",
+                scale: jeep.uid === nearestJeep?.uid ? 1.4 : 1.1,
+              }}
             />
-          )}
+          ))}
 
           {/* User location */}
           {userLocation && <Marker position={userLocation} icon={userIcon} />}

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { GoogleMap, Marker, InfoWindow } from "@react-google-maps/api";
+import { GoogleMap, Marker, InfoWindow, Polyline } from "@react-google-maps/api";
 import {
   LayoutDashboard, Activity, Truck, Users, Map,
   UserCheck, BarChart2, Settings, Bus, LogOut,
@@ -57,7 +57,7 @@ export default function AdminDashboard() {
 
   const content = {
     dashboard: <DashboardPage kpis={kpis} drivers={drivers} passengers={passengers} />,
-    "live-ops": <LiveOpsPage drivers={drivers} passengers={passengers} />,
+    "live-ops": <LiveOpsPage drivers={drivers} passengers={passengers} routes={routes} />,
     fleet:      <FleetPage drivers={drivers} />,
     drivers:    <DriversPage drivers={drivers} />,
     routes:     <RoutesPage routes={routes} stops={stops} passengers={passengers} />,
@@ -247,17 +247,41 @@ function DashboardPage({ kpis, drivers, passengers }) {
 
 // ── Live Operations Page ───────────────────────────────────────────────────────
 
-function LiveOpsPage({ drivers, passengers }) {
+function LiveOpsPage({ drivers, passengers, routes = [] }) {
   const [selectedDriver, setSelectedDriver] = useState(null);
 
-  const mapCenter = DEFAULT_CENTER;
   const activeDrivers = drivers.filter((d) => d.lat && d.lng);
+  const waitingPassengers = passengers.filter((p) => p.lat && p.lng);
+
+  const routeDoc = routes.find((r) => r.route_id === "R01");
+  const routePolyline = (routeDoc?.polyline ?? []).map((p) =>
+    Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }
+  );
+
+  const jeepIcon = (color) => MAPS_API_KEY ? {
+    path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
+    fillColor: color,
+    fillOpacity: 1,
+    strokeColor: "#fff",
+    strokeWeight: 2,
+    scale: 1.4,
+    anchor: { x: 12, y: 22 },
+  } : undefined;
+
+  const passengerIcon = MAPS_API_KEY ? {
+    path: "M -6,0 a 6,6 0 1,0 12,0 a 6,6 0 1,0 -12,0",
+    fillColor: "#2563eb",
+    fillOpacity: 0.85,
+    strokeColor: "#fff",
+    strokeWeight: 2,
+    scale: 1,
+  } : undefined;
 
   return (
     <div className="p-8 space-y-4">
       <PageHeader
         title="Live Operations"
-        subtitle="Real-time fleet map with vehicle tracking and demand heatmap."
+        subtitle="Real-time fleet map with route overlay, vehicle tracking, and passenger demand."
       />
 
       <div className="grid grid-cols-3 gap-4 mt-6" style={{ height: "calc(100vh - 220px)" }}>
@@ -266,41 +290,52 @@ function LiveOpsPage({ drivers, passengers }) {
           {MAPS_API_KEY ? (
             <GoogleMap
               mapContainerStyle={{ width: "100%", height: "100%" }}
-              center={mapCenter}
-              zoom={13}
+              center={DEFAULT_CENTER}
+              zoom={12}
               options={MAP_OPTIONS}
             >
+              {/* Route polyline */}
+              {routePolyline.length > 1 && (
+                <Polyline
+                  path={routePolyline}
+                  options={{ strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: 0.65 }}
+                />
+              )}
+
+              {/* Waiting passenger markers (blue dots) */}
+              {waitingPassengers.map((p) => (
+                <Marker
+                  key={p.id}
+                  position={{ lat: p.lat, lng: p.lng }}
+                  icon={passengerIcon}
+                />
+              ))}
+
+              {/* Driver/jeep markers — colored by occupancy */}
               {activeDrivers.map((d) => {
-                const pct  = d.occupancy_pct ?? 0;
-                const color = occupancyColor(pct);
+                const color = occupancyColor(d.occupancy_pct ?? 0);
                 return (
                   <Marker
                     key={d.uid}
                     position={{ lat: d.lat, lng: d.lng }}
-                    icon={MAPS_API_KEY ? {
-                      path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
-                      fillColor: color,
-                      fillOpacity: 1,
-                      strokeColor: "#fff",
-                      strokeWeight: 2,
-                      scale: 1.4,
-                      anchor: { x: 12, y: 22 },
-                    } : undefined}
+                    icon={jeepIcon(color)}
                     onClick={() => setSelectedDriver(d)}
                   />
                 );
               })}
+
               {selectedDriver && (
                 <InfoWindow
                   position={{ lat: selectedDriver.lat, lng: selectedDriver.lng }}
                   onCloseClick={() => setSelectedDriver(null)}
                 >
-                  <div className="font-manrope p-1">
-                    <p className="font-bold text-pasada-dark text-sm">{selectedDriver.plate ?? "ABC 1234"}</p>
+                  <div className="font-manrope p-1 min-w-[130px]">
+                    <p className="font-bold text-pasada-dark text-sm">{selectedDriver.plate ?? "—"}</p>
                     <p className="text-xs text-pasada-muted">{selectedDriver.driver_name ?? "Driver"}</p>
                     <p className="text-xs text-pasada-warm mt-1">
                       {selectedDriver.occupancy_pct ?? 0}% full · {selectedDriver.current_stop ?? "—"}
                     </p>
+                    <p className="text-xs text-pasada-muted">{selectedDriver.speed_kmh ?? 0} km/h</p>
                   </div>
                 </InfoWindow>
               )}
@@ -314,9 +349,10 @@ function LiveOpsPage({ drivers, passengers }) {
 
         {/* Side list */}
         <div className="flex flex-col gap-3 overflow-y-auto">
+          {/* Legend */}
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold uppercase tracking-widest text-pasada-muted">
-              Active Units ({drivers.length})
+              Active Units ({activeDrivers.length})
             </p>
             <div className="flex items-center gap-2 text-[10px] text-pasada-muted">
               <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-green-500" />Low</span>
@@ -324,12 +360,23 @@ function LiveOpsPage({ drivers, passengers }) {
               <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-red-500" />High</span>
             </div>
           </div>
-          {drivers.length === 0 ? (
+
+          {/* Waiting passengers summary */}
+          {waitingPassengers.length > 0 && (
+            <div className="rounded-xl bg-blue-50 border border-blue-100 px-3 py-2 flex items-center gap-2">
+              <span className="size-2.5 rounded-full bg-blue-500 shrink-0" />
+              <span className="text-xs text-blue-700 font-semibold">
+                {waitingPassengers.length} passenger{waitingPassengers.length !== 1 ? "s" : ""} waiting on route
+              </span>
+            </div>
+          )}
+
+          {activeDrivers.length === 0 ? (
             <div className="rounded-2xl bg-white border border-pasada-border p-6 text-center">
-              <p className="text-sm text-pasada-muted">No active drivers. Run the seed script.</p>
+              <p className="text-sm text-pasada-muted">No active drivers. Run seed_demo.py to populate.</p>
             </div>
           ) : (
-            drivers.map((d) => {
+            activeDrivers.map((d) => {
               const pct   = d.occupancy_pct ?? 0;
               const color = occupancyColor(pct);
               return (
@@ -339,7 +386,7 @@ function LiveOpsPage({ drivers, passengers }) {
                   className="rounded-xl bg-white border border-pasada-border p-3 text-left hover:shadow-sm transition-shadow"
                 >
                   <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-sm font-bold text-pasada-dark">{d.plate ?? "ABC 1234"}</p>
+                    <p className="text-sm font-bold text-pasada-dark">{d.plate ?? "—"}</p>
                     <span
                       className="text-[10px] font-bold px-2 py-0.5 rounded-full"
                       style={{ backgroundColor: color + "22", color }}
@@ -349,6 +396,12 @@ function LiveOpsPage({ drivers, passengers }) {
                   </div>
                   <p className="text-xs text-pasada-muted">{d.driver_name ?? "Driver"}</p>
                   <p className="text-xs text-pasada-muted mt-0.5">{d.current_stop ?? "—"} · {d.speed_kmh ?? 0} km/h</p>
+                  <div className="mt-1.5 h-1 rounded-full bg-pasada-cream">
+                    <div
+                      className="h-1 rounded-full transition-all"
+                      style={{ width: `${pct}%`, backgroundColor: color }}
+                    />
+                  </div>
                 </button>
               );
             })
