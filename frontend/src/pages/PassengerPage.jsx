@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
-import { GoogleMap, Marker, Polyline } from "@react-google-maps/api";
+import { useState, useEffect, useRef } from "react";
+import { GoogleMap, Marker, Polyline, DirectionsRenderer } from "@react-google-maps/api";
 import {
-  Home, Map, List, User, LogOut, X, ChevronRight,
-  Clock, Users, Search, MapPin, Navigation,
+  Home, Map, User, LogOut, X, ChevronRight,
+  Clock, Search, MapPin, Bus,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useCollection } from "../hooks/useFirestore";
@@ -17,10 +17,9 @@ const CAPACITY = 18;
 const ROUTE_ID = "R01";
 
 const TABS = [
-  { id: "home",    label: "HOME",    icon: Home      },
-  { id: "map",     label: "MAP",     icon: Map       },
-  { id: "queue",   label: "QUEUE",   icon: List      },
-  { id: "profile", label: "PROFILE", icon: User      },
+  { id: "home",    label: "HOME",    icon: Home },
+  { id: "map",     label: "MAP",     icon: Map  },
+  { id: "profile", label: "PROFILE", icon: User },
 ];
 
 const WARM_MAP_OPTIONS = {
@@ -40,10 +39,21 @@ const WARM_MAP_OPTIONS = {
 export default function PassengerPage() {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab]     = useState("home");
-  const [selectedStop, setSelectedStop] = useState(ROUTE_STOPS[1]);
+  const [selectedStop, setSelectedStop] = useState(ROUTE_STOPS[0]);
   const [isWaiting, setIsWaiting]     = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [etaStart, setEtaStart]       = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    const id = navigator.geolocation.watchPosition(
+      (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      null,
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, []);
 
   const { data: drivers } = useCollection("drivers", [["route", "==", ROUTE_ID]]);
   const activeDrivers     = drivers.filter((d) => d.status !== "ended");
@@ -103,11 +113,11 @@ export default function PassengerPage() {
           onShowDetails={() => setShowDetails(true)}
           currentEta={currentEta}
           etaProgress={etaProgress}
+          userLocation={userLocation}
         />
       )}
-      {activeTab === "map"     && <MapTab nearestJeep={nearestJeep} selectedStop={selectedStop} />}
-      {activeTab === "queue"   && <QueueTab selectedStop={selectedStop} nearestJeep={nearestJeep} />}
-      {activeTab === "profile" && <ProfileTab onLogout={logout} />}
+      {activeTab === "map"     && <MapTab nearestJeep={nearestJeep} selectedStop={selectedStop} onSelectStop={setSelectedStop} userLocation={userLocation} />}
+      {activeTab === "profile" && <ProfileTab user={user} onLogout={logout} />}
 
       <TabBar tabs={TABS} active={activeTab} onChange={setActiveTab} />
 
@@ -124,7 +134,12 @@ export default function PassengerPage() {
 
 // ── Home Tab ──────────────────────────────────────────────────────────────────
 
-function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, onCancel, onShowDetails, currentEta, etaProgress }) {
+function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, onCancel, onShowDetails, currentEta, etaProgress, userLocation }) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen,  setSearchOpen]  = useState(false);
+  const [directions,  setDirections]  = useState(null);
+  const mapRef = useRef(null);
+
   const occCount = nearestJeep?.occupancy_count ?? 0;
   const isFull   = occCount >= CAPACITY;
   const seats    = CAPACITY - occCount;
@@ -135,21 +150,52 @@ function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, o
     ? { lat: nearestJeep.lat, lng: nearestJeep.lng }
     : DEFAULT_CENTER;
 
-  const jeepIcon = MAPS_API_KEY
-    ? {
-        path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
-        fillColor: "#C2652A",
-        fillOpacity: 1,
-        strokeColor: "#fff",
-        strokeWeight: 2,
-        scale: 1.4,
-        anchor: { x: 12, y: 22 },
-      }
-    : undefined;
+  const jeepIcon = MAPS_API_KEY ? {
+    path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
+    fillColor: "#C2652A", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2, scale: 1.4,
+    anchor: { x: 12, y: 22 },
+  } : undefined;
+
+  const userIcon = {
+    path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
+    fillColor: "#2563eb", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 3, scale: 0.85,
+  };
+
+  const jeepStopIdx  = ROUTE_STOPS.findIndex((s) => s.name === nearestJeep?.current_stop);
+  const jeepRoutePct = jeepStopIdx >= 0 ? jeepStopIdx / (ROUTE_STOPS.length - 1) : etaProgress;
+
+  const filteredStops = searchQuery
+    ? ROUTE_STOPS.filter((s) => s.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    : ROUTE_STOPS;
+
+  function selectStop(stop) {
+    onSelectStop(stop);
+    setSearchQuery(stop.name);
+    setSearchOpen(false);
+    mapRef.current?.panTo({ lat: stop.lat, lng: stop.lng });
+  }
+
+  // Directions: jeep → selected stop; falls back to user location or route start
+  useEffect(() => {
+    if (!selectedStop || !window.google?.maps) return;
+    const origin = nearestJeep?.lat
+      ? { lat: nearestJeep.lat, lng: nearestJeep.lng }
+      : userLocation ?? { lat: ROUTE_STOPS[0].lat, lng: ROUTE_STOPS[0].lng };
+    new window.google.maps.DirectionsService().route(
+      { origin, destination: { lat: selectedStop.lat, lng: selectedStop.lng }, travelMode: "DRIVING" },
+      (result, status) => { if (status === "OK") setDirections(result); }
+    );
+  }, [selectedStop?.id, !!nearestJeep?.lat]);
+
+  // Auto-pan to jeep as it moves
+  useEffect(() => {
+    if (!nearestJeep?.lat || !mapRef.current) return;
+    mapRef.current.panTo({ lat: nearestJeep.lat, lng: nearestJeep.lng });
+  }, [nearestJeep?.lat, nearestJeep?.lng]);
 
   return (
     <div className="relative flex-1 overflow-hidden">
-      {/* Map fills top portion */}
+      {/* Map */}
       <div className="absolute inset-0">
         {MAPS_API_KEY ? (
           <GoogleMap
@@ -157,33 +203,48 @@ function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, o
             center={mapCenter}
             zoom={14}
             options={WARM_MAP_OPTIONS}
+            onLoad={(map) => { mapRef.current = map; }}
           >
-            {nearestJeep?.lat && (
-              <Marker position={{ lat: nearestJeep.lat, lng: nearestJeep.lng }} icon={jeepIcon} />
+            {/* User location — blue dot */}
+            {userLocation && <Marker position={userLocation} icon={userIcon} />}
+
+            {/* Directions route (real roads) or fallback demo polyline */}
+            {directions ? (
+              <DirectionsRenderer
+                directions={directions}
+                options={{
+                  suppressMarkers: true,
+                  polylineOptions: { strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: 0.75 },
+                }}
+              />
+            ) : (
+              <Polyline
+                path={DEMO_POLYLINE.map(([lat, lng]) => ({ lat, lng }))}
+                options={{ strokeColor: "#C2652A", strokeWeight: 3, strokeOpacity: 0.6 }}
+              />
             )}
+
+            {/* Stop markers — clickable to set destination */}
             {ROUTE_STOPS.map((stop) => (
               <Marker
                 key={stop.id}
                 position={{ lat: stop.lat, lng: stop.lng }}
-                icon={
-                  MAPS_API_KEY
-                    ? {
-                        // SVG circle path, no window.google dependency
-                        path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
-                        fillColor: selectedStop?.id === stop.id ? "#C2652A" : "#9A9088",
-                        fillOpacity: 1,
-                        strokeColor: "#fff",
-                        strokeWeight: 2,
-                        scale: selectedStop?.id === stop.id ? 1.1 : 0.85,
-                      }
-                    : undefined
-                }
+                icon={{
+                  path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
+                  fillColor: selectedStop?.id === stop.id ? "#C2652A" : "#9A9088",
+                  fillOpacity: 1,
+                  strokeColor: "#fff",
+                  strokeWeight: 2,
+                  scale: selectedStop?.id === stop.id ? 1.1 : 0.85,
+                }}
+                onClick={() => selectStop(stop)}
               />
             ))}
-            <Polyline
-              path={DEMO_POLYLINE.map(([lat, lng]) => ({ lat, lng }))}
-              options={{ strokeColor: "#C2652A", strokeWeight: 3, strokeOpacity: 0.6 }}
-            />
+
+            {/* Jeep marker */}
+            {nearestJeep?.lat && (
+              <Marker position={{ lat: nearestJeep.lat, lng: nearestJeep.lng }} icon={jeepIcon} />
+            )}
           </GoogleMap>
         ) : (
           <div className="w-full h-full bg-[#f0e8da] flex items-center justify-center">
@@ -194,27 +255,43 @@ function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, o
         )}
       </div>
 
-      {/* Floating header / stop selector */}
+      {/* Floating search bar */}
       <div className="absolute top-0 inset-x-0 z-20 px-4 pt-10 pb-3">
         <div className="rounded-2xl bg-white/95 shadow-lg border border-pasada-border px-4 py-3">
-          <p className="text-xs font-semibold uppercase tracking-widest text-pasada-muted mb-2">
-            Your Stop
-          </p>
-          <div className="flex gap-2 overflow-x-auto pb-0.5">
-            {ROUTE_STOPS.map((stop) => (
-              <button
-                key={stop.id}
-                onClick={() => onSelectStop(stop)}
-                className={`flex-shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors
-                  ${selectedStop?.id === stop.id
-                    ? "bg-pasada-rust text-white"
-                    : "bg-pasada-cream border border-pasada-border text-pasada-warm"
-                  }`}
-              >
-                {stop.name}
+          <div className="flex items-center gap-2">
+            <Search size={15} className="text-pasada-muted shrink-0" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
+              onFocus={() => setSearchOpen(true)}
+              onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+              placeholder="Where to?"
+              className="flex-1 bg-transparent text-sm text-pasada-dark placeholder-pasada-muted outline-none"
+            />
+            {searchQuery && (
+              <button onClick={() => { setSearchQuery(""); setSearchOpen(false); }}>
+                <X size={14} className="text-pasada-muted" />
               </button>
-            ))}
+            )}
           </div>
+
+          {searchOpen && (
+            <div className="mt-2 space-y-0.5">
+              {filteredStops.map((stop) => (
+                <button
+                  key={stop.id}
+                  onMouseDown={() => selectStop(stop)}
+                  className="w-full flex items-center gap-2.5 rounded-xl px-2 py-2 text-sm text-left hover:bg-pasada-cream transition-colors"
+                >
+                  <MapPin size={13} className={selectedStop?.id === stop.id ? "text-pasada-rust" : "text-pasada-muted"} />
+                  <span className={selectedStop?.id === stop.id ? "font-semibold text-pasada-rust" : "text-pasada-dark"}>
+                    {stop.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -243,23 +320,71 @@ function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, o
               </span>
             </div>
 
-            {/* ETA progress bar */}
-            <div className="h-1 bg-pasada-cream">
-              <div
-                className="h-1 bg-pasada-rust transition-all duration-1000"
-                style={{ width: `${etaProgress * 100}%` }}
-              />
+            {/* Route progress — pill track with bus icon */}
+            <div className="px-4 pt-3 pb-1">
+              <div className="relative h-8">
+                {/* Track pill */}
+                <div className="absolute inset-0 rounded-full bg-pasada-cream border border-pasada-border/60" />
+                {/* Fill */}
+                <div
+                  className="absolute left-0 top-0 bottom-0 rounded-full bg-pasada-rust/25 transition-all duration-1000"
+                  style={{ width: `${Math.max(jeepRoutePct * 100, 6)}%` }}
+                />
+                {/* Stop tick marks */}
+                {ROUTE_STOPS.map((stop, i) => {
+                  const pct = i / (ROUTE_STOPS.length - 1);
+                  return (
+                    <div
+                      key={stop.id}
+                      className={`absolute top-1/2 w-0.5 h-3 -translate-y-1/2 -translate-x-1/2 ${
+                        stop.id === selectedStop?.id ? "bg-pasada-dark" : "bg-pasada-border"
+                      }`}
+                      style={{ left: `${pct * 100}%` }}
+                    />
+                  );
+                })}
+                {/* Bus icon at leading edge of fill */}
+                <div
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10 transition-all duration-1000"
+                  style={{ left: `${Math.max(jeepRoutePct * 100, 6)}%` }}
+                >
+                  <div className="flex size-8 items-center justify-center rounded-full bg-pasada-rust border-2 border-white shadow-md">
+                    <Bus size={13} className="text-white" />
+                  </div>
+                </div>
+              </div>
+              {/* Labels: only first, selected, and last to avoid clutter */}
+              <div className="flex justify-between mt-1.5">
+                {ROUTE_STOPS.map((stop, i) => {
+                  const isFirst    = i === 0;
+                  const isLast     = i === ROUTE_STOPS.length - 1;
+                  const isSelected = stop.id === selectedStop?.id;
+                  if (!isFirst && !isLast && !isSelected) return <span key={stop.id} />;
+                  return (
+                    <span
+                      key={stop.id}
+                      className={`text-[9px] leading-tight truncate max-w-[60px] ${
+                        isSelected ? "font-bold text-pasada-dark" : "text-pasada-muted"
+                      }`}
+                    >
+                      {stop.name.split(" ")[0]}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Info row */}
-            <div className="flex items-center justify-between px-4 py-3">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-pasada-border mt-1">
               <div>
                 <p className="text-[11px] text-pasada-muted">Route</p>
                 <p className="text-sm font-bold text-pasada-dark">Lumban → Sta. Cruz</p>
               </div>
               <div className="text-right">
-                <p className="text-[11px] text-pasada-muted">Stop</p>
-                <p className="text-sm font-bold text-pasada-dark">{selectedStop?.name}</p>
+                <p className="text-[11px] text-pasada-muted">Jeep at</p>
+                <p className="text-sm font-bold text-pasada-dark">
+                  {nearestJeep?.current_stop ?? "—"}
+                </p>
               </div>
             </div>
 
@@ -284,7 +409,7 @@ function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, o
               onClick={onWait}
               className="w-full rounded-2xl bg-pasada-rust py-4 text-base font-bold text-white shadow-sm hover:bg-pasada-rust/90 transition-colors"
             >
-              I'm waiting at {selectedStop?.name}
+              I'm waiting at {selectedStop?.name ?? "…"}
             </button>
           ) : (
             <>
@@ -317,214 +442,222 @@ function HomeTab({ nearestJeep, selectedStop, onSelectStop, isWaiting, onWait, o
 
 // ── Map Tab ───────────────────────────────────────────────────────────────────
 
-function MapTab({ nearestJeep, selectedStop }) {
-  const [query, setQuery] = useState("");
+function MapTab({ nearestJeep, selectedStop, onSelectStop, userLocation }) {
+  const [tappedStop,      setTappedStop]      = useState(null);
+  const [searchQuery,     setSearchQuery]      = useState("");
+  const [routeDirections, setRouteDirections]  = useState(null);
+  const mapRef = useRef(null);
 
-  const RECENT_ROUTES = [
-    { id: 1, from: "Town Plaza", to: "Sta. Cruz", fare: "₱15" },
-    { id: 2, from: "Lumban",     to: "Town Plaza", fare: "₱13" },
-  ];
+  // Fetch the real road route once using Directions API with all stops as waypoints
+  useEffect(() => {
+    if (!window.google?.maps || !MAPS_API_KEY) return;
+    const waypoints = ROUTE_STOPS.slice(1, -1).map((s) => ({
+      location: { lat: s.lat, lng: s.lng },
+      stopover: true,
+    }));
+    new window.google.maps.DirectionsService().route(
+      {
+        origin:             { lat: ROUTE_STOPS[0].lat,                         lng: ROUTE_STOPS[0].lng },
+        destination:        { lat: ROUTE_STOPS[ROUTE_STOPS.length - 1].lat,    lng: ROUTE_STOPS[ROUTE_STOPS.length - 1].lng },
+        waypoints,
+        optimizeWaypoints:  false,
+        travelMode:         window.google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => { if (status === "OK") setRouteDirections(result); }
+    );
+  }, []);
 
-  const POPULAR = [
-    { id: 1, name: "Sta. Cruz Market",   mins: "8 min"  },
-    { id: 2, name: "Town Plaza",          mins: "4 min"  },
-    { id: 3, name: "Pagsawitan Terminal", mins: "12 min" },
-  ];
+  const filteredStops = searchQuery
+    ? ROUTE_STOPS.filter((s) => s.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    : ROUTE_STOPS;
+
+  const jeepIcon = MAPS_API_KEY ? {
+    path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
+    fillColor: "#C2652A", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2, scale: 1.4,
+    anchor: { x: 12, y: 22 },
+  } : undefined;
+
+  const userIcon = {
+    path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
+    fillColor: "#2563eb", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 3, scale: 0.85,
+  };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-pasada-cream">
-      <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-4">
-        <h1 className="font-garamond text-3xl font-bold text-pasada-dark">Discover your Route</h1>
-        {/* Search */}
-        <div className="mt-3 flex items-center gap-2 rounded-xl bg-pasada-cream border border-pasada-border px-3 py-2.5">
-          <Search size={16} className="text-pasada-muted shrink-0" />
+    <div className="relative flex-1 overflow-hidden">
+      {/* Floating search bar */}
+      <div className="absolute top-0 inset-x-0 z-20 px-4 pt-10 pb-2">
+        <div className="rounded-2xl bg-white/95 shadow-md border border-pasada-border px-4 py-2.5 flex items-center gap-2">
+          <Search size={15} className="text-pasada-muted shrink-0" />
           <input
             type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search destinations…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Filter stops…"
             className="flex-1 bg-transparent text-sm text-pasada-dark placeholder-pasada-muted outline-none"
           />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery("")}>
+              <X size={14} className="text-pasada-muted" />
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="px-4 py-4 space-y-5">
-        {/* Recent routes */}
-        <section>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-pasada-muted">
-            Recent Routes
-          </p>
-          <div className="space-y-2">
-            {RECENT_ROUTES.map((r) => (
-              <div
-                key={r.id}
-                className="flex items-center gap-3 rounded-xl bg-white border border-pasada-border p-3"
-              >
-                <div className="flex size-9 items-center justify-center rounded-lg bg-pasada-rust/10">
-                  <Navigation size={16} className="text-pasada-rust" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-pasada-dark">
-                    {r.from} → {r.to}
-                  </p>
-                  <p className="text-xs text-pasada-muted">Base fare {r.fare}</p>
-                </div>
-                <ChevronRight size={16} className="text-pasada-muted/60" />
-              </div>
-            ))}
-          </div>
-        </section>
+      {/* Full-screen map */}
+      {MAPS_API_KEY ? (
+        <GoogleMap
+          mapContainerStyle={{ width: "100%", height: "100%" }}
+          center={selectedStop ? { lat: selectedStop.lat, lng: selectedStop.lng } : DEFAULT_CENTER}
+          zoom={13}
+          options={WARM_MAP_OPTIONS}
+          onLoad={(map) => { mapRef.current = map; }}
+        >
+          {/* Real road route from Directions API, fallback to demo polyline */}
+          {routeDirections ? (
+            <DirectionsRenderer
+              directions={routeDirections}
+              options={{
+                suppressMarkers: true,
+                polylineOptions: { strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: 0.7 },
+              }}
+            />
+          ) : (
+            <Polyline
+              path={DEMO_POLYLINE.map(([lat, lng]) => ({ lat, lng }))}
+              options={{ strokeColor: "#C2652A", strokeWeight: 3, strokeOpacity: 0.55 }}
+            />
+          )}
 
-        {/* Popular destinations */}
-        <section>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-pasada-muted">
-            Popular Destinations
-          </p>
-          <div className="space-y-2">
-            {POPULAR.map((p) => (
-              <div
-                key={p.id}
-                className="flex items-center gap-3 rounded-xl bg-white border border-pasada-border p-3"
-              >
-                <div className="flex size-9 items-center justify-center rounded-lg bg-pasada-cream">
-                  <MapPin size={16} className="text-pasada-warm" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-pasada-dark">{p.name}</p>
-                  <p className="text-xs text-pasada-muted">~{p.mins} from your stop</p>
-                </div>
-                <ChevronRight size={16} className="text-pasada-muted/60" />
-              </div>
-            ))}
-          </div>
-        </section>
+          {/* Clickable stop markers */}
+          {filteredStops.map((stop) => (
+            <Marker
+              key={stop.id}
+              position={{ lat: stop.lat, lng: stop.lng }}
+              icon={{
+                path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
+                fillColor: selectedStop?.id === stop.id
+                  ? "#C2652A"
+                  : tappedStop?.id === stop.id ? "#3A302A" : "#9A9088",
+                fillOpacity: 1,
+                strokeColor: "#fff",
+                strokeWeight: 2,
+                scale: selectedStop?.id === stop.id ? 1.2 : 0.9,
+              }}
+              onClick={() => {
+                setTappedStop(stop);
+                mapRef.current?.panTo({ lat: stop.lat, lng: stop.lng });
+              }}
+            />
+          ))}
 
-        {/* Stops on route */}
-        <section>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-pasada-muted">
-            Route 01 · Stops
+          {/* Live jeep */}
+          {nearestJeep?.lat && (
+            <Marker
+              position={{ lat: nearestJeep.lat, lng: nearestJeep.lng }}
+              icon={jeepIcon}
+            />
+          )}
+
+          {/* User location */}
+          {userLocation && <Marker position={userLocation} icon={userIcon} />}
+        </GoogleMap>
+      ) : (
+        <div className="flex-1 h-full bg-[#f0e8da] flex items-center justify-center">
+          <p className="text-pasada-warm text-sm text-center px-6">
+            Add VITE_GOOGLE_MAPS_API_KEY to show map
           </p>
-          <div className="rounded-2xl bg-white border border-pasada-border p-4">
-            <div className="flex items-center gap-0">
-              {ROUTE_STOPS.map((stop, i) => (
-                <div key={stop.id} className="flex flex-1 flex-col items-center gap-1">
-                  <div className="flex items-center w-full">
-                    {i > 0 && <div className="flex-1 h-0.5 bg-pasada-rust/30" />}
-                    <div className={`size-3 rounded-full border-2 ${i === 0 || i === ROUTE_STOPS.length - 1 ? "bg-pasada-rust border-pasada-rust" : "bg-white border-pasada-rust"}`} />
-                    {i < ROUTE_STOPS.length - 1 && <div className="flex-1 h-0.5 bg-pasada-rust/30" />}
-                  </div>
-                  <span className="text-[9px] text-pasada-muted text-center leading-tight">{stop.name}</span>
-                </div>
-              ))}
+        </div>
+      )}
+
+      {/* Tapped stop bottom panel */}
+      {tappedStop && (
+        <div className="absolute bottom-0 inset-x-0 z-20 px-4 pb-4">
+          <div className="rounded-2xl bg-white border border-pasada-border shadow-xl p-4 flex items-center gap-3">
+            <div className="flex size-10 items-center justify-center rounded-xl bg-pasada-rust/10 shrink-0">
+              <MapPin size={18} className="text-pasada-rust" />
             </div>
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-// ── Queue Tab ─────────────────────────────────────────────────────────────────
-
-function QueueTab({ selectedStop, nearestJeep }) {
-  const { data: passengers } = useCollection("passengers", [
-    ["status", "==", "waiting"],
-    ["route",  "==", ROUTE_ID],
-  ]);
-
-  const byStop = ROUTE_STOPS.map((s) => ({
-    ...s,
-    count: passengers.filter((p) => p.stop === s.name).length,
-  }));
-
-  return (
-    <div className="flex-1 overflow-y-auto bg-pasada-cream">
-      <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-4">
-        <h1 className="font-garamond text-3xl font-bold text-pasada-dark">Passenger Queue</h1>
-        <p className="text-sm text-pasada-muted mt-0.5">Live waiting demand by stop</p>
-      </div>
-
-      <div className="px-4 py-4 space-y-3">
-        {/* Total waiting */}
-        <div className="rounded-2xl bg-pasada-rust/10 border border-pasada-rust/20 p-4 flex items-center gap-3">
-          <Users size={22} className="text-pasada-rust" />
-          <div>
-            <p className="text-xl font-black text-pasada-rust">
-              {passengers.length}
-            </p>
-            <p className="text-xs text-pasada-warm">total waiting on route R01</p>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-pasada-dark">{tappedStop.name}</p>
+              <p className="text-xs text-pasada-muted">
+                {selectedStop?.id === tappedStop.id ? "Current destination" : "Stop on Route 01"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setTappedStop(null)}
+                className="flex size-8 items-center justify-center rounded-full bg-pasada-cream"
+              >
+                <X size={14} className="text-pasada-warm" />
+              </button>
+              {selectedStop?.id !== tappedStop.id && (
+                <button
+                  onClick={() => { onSelectStop(tappedStop); setTappedStop(null); }}
+                  className="flex items-center gap-1.5 rounded-xl bg-pasada-rust px-3 py-2 text-xs font-bold text-white"
+                >
+                  Go here <ChevronRight size={13} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
-
-        {/* Per-stop breakdown */}
-        {byStop.map((stop) => (
-          <div
-            key={stop.id}
-            className="flex items-center justify-between rounded-xl bg-white border border-pasada-border px-4 py-3"
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex size-8 items-center justify-center rounded-lg bg-pasada-cream">
-                <MapPin size={14} className="text-pasada-warm" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-pasada-dark">{stop.name}</p>
-                <p className="text-xs text-pasada-muted">Stop on R01</p>
-              </div>
-            </div>
-            <div className="text-right">
-              <p className="text-lg font-black text-pasada-dark">{stop.count}</p>
-              <p className="text-[10px] text-pasada-muted">waiting</p>
-            </div>
-          </div>
-        ))}
-      </div>
+      )}
     </div>
   );
 }
 
 // ── Profile Tab ───────────────────────────────────────────────────────────────
 
-function ProfileTab({ onLogout }) {
+function ProfileTab({ user, onLogout }) {
+  const displayName = user?.displayName || user?.email?.split("@")[0] || "Passenger";
+  const initial     = displayName[0]?.toUpperCase() ?? "P";
+  const joinedDate  = user?.metadata?.creationTime
+    ? new Date(user.metadata.creationTime).toLocaleDateString("en-PH", { month: "long", year: "numeric" })
+    : null;
+
   return (
     <div className="flex-1 overflow-y-auto bg-pasada-cream">
       <div className="bg-white border-b border-pasada-border px-5 pt-10 pb-5">
         <div className="flex items-center gap-4">
-          <div className="flex size-14 items-center justify-center rounded-full bg-pasada-rust text-2xl font-black text-white">
-            P
-          </div>
+          {user?.photoURL ? (
+            <img
+              src={user.photoURL}
+              alt={displayName}
+              className="size-14 rounded-full object-cover ring-2 ring-pasada-rust/20"
+            />
+          ) : (
+            <div className="flex size-14 items-center justify-center rounded-full bg-pasada-rust text-2xl font-black text-white">
+              {initial}
+            </div>
+          )}
           <div>
-            <p className="text-lg font-bold text-pasada-dark">Passenger</p>
-            <p className="text-sm text-pasada-muted">Anonymous user</p>
+            <p className="text-lg font-bold text-pasada-dark">{displayName}</p>
+            <p className="text-sm text-pasada-muted">{user?.email ?? "Passenger"}</p>
+            {joinedDate && (
+              <p className="text-xs text-pasada-muted/60 mt-0.5">Member since {joinedDate}</p>
+            )}
           </div>
         </div>
       </div>
 
       <div className="px-4 py-4 space-y-4">
-        {/* Stats */}
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            { label: "Trips Today",    value: "3"       },
-            { label: "Avg Wait Time",  value: "6 min"   },
-          ].map(({ label, value }) => (
-            <div key={label} className="rounded-2xl bg-white border border-pasada-border p-4 text-center">
-              <p className="text-2xl font-black text-pasada-dark">{value}</p>
-              <p className="text-xs text-pasada-muted mt-1">{label}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Preferences */}
+        {/* Account info */}
         <div className="rounded-2xl bg-white border border-pasada-border divide-y divide-pasada-border">
-          {[
-            { label: "Default Route",   value: "Lumban → Sta. Cruz" },
-            { label: "Default Stop",    value: "Town Plaza"          },
-            { label: "Notifications",   value: "On"                  },
-          ].map(({ label, value }) => (
-            <div key={label} className="flex items-center justify-between px-4 py-3">
-              <span className="text-sm text-pasada-muted">{label}</span>
-              <span className="text-sm font-semibold text-pasada-dark">{value}</span>
-            </div>
-          ))}
+          <div className="flex items-center justify-between px-4 py-3">
+            <span className="text-sm text-pasada-muted">Route</span>
+            <span className="text-sm font-semibold text-pasada-dark">Lumban → Sta. Cruz</span>
+          </div>
+          <div className="flex items-center justify-between px-4 py-3">
+            <span className="text-sm text-pasada-muted">Sign-in method</span>
+            <span className="text-sm font-semibold text-pasada-dark">
+              {user?.providerData?.[0]?.providerId === "google.com" ? "Google" : "Email"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between px-4 py-3">
+            <span className="text-sm text-pasada-muted">Account ID</span>
+            <span className="text-xs font-mono text-pasada-muted truncate max-w-[140px]">
+              {user?.uid?.slice(0, 12) ?? "—"}…
+            </span>
+          </div>
         </div>
 
         <button
@@ -532,7 +665,7 @@ function ProfileTab({ onLogout }) {
           className="flex w-full items-center justify-center gap-2 rounded-xl border border-pasada-border bg-white py-3.5 text-sm font-bold text-pasada-warm hover:bg-pasada-cream transition-colors"
         >
           <LogOut size={16} />
-          Switch Role
+          Sign Out
         </button>
       </div>
     </div>
