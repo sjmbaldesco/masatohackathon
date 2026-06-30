@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 import { GoogleMap, Marker, InfoWindow, Polyline, Circle } from "@react-google-maps/api";
 import {
-  LayoutDashboard, Activity, Truck, Users, Map,
+  LayoutDashboard, Activity, Truck, Users, Map as MapIcon,
   UserCheck, BarChart2, Settings, Bus, LogOut,
   TrendingUp, TrendingDown, Filter, Plus, X,
   ChevronRight, MapPin, Zap, AlertTriangle, Info,
@@ -20,7 +20,7 @@ const NAV = [
   { id: "live-ops",  label: "Live Operations",  icon: Activity        },
   { id: "fleet",     label: "Fleet Management", icon: Truck           },
   { id: "drivers",   label: "Drivers",          icon: Users           },
-  { id: "routes",    label: "Routes",           icon: Map             },
+  { id: "routes",    label: "Routes",           icon: MapIcon         },
   { id: "demand",    label: "Passenger Demand", icon: UserCheck       },
   { id: "analytics", label: "Analytics",        icon: BarChart2       },
   { id: "settings",  label: "Settings",         icon: Settings        },
