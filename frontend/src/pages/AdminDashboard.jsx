@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
-import { GoogleMap, Marker, InfoWindow, Polyline, Circle } from "@react-google-maps/api";
+import { GoogleMap, Marker, InfoWindow, PolylineF, CircleF } from "@react-google-maps/api";
 import {
   LayoutDashboard, Activity, Truck, Users, Map as MapIcon,
   UserCheck, BarChart2, Settings, Bus, LogOut,
@@ -322,7 +322,7 @@ function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
             >
               {/* Route polyline */}
               {routePolyline.length > 1 && (
-                <Polyline
+                <PolylineF
                   key={routePolyline.length}
                   path={routePolyline}
                   options={{ strokeColor: "#EF233C", strokeWeight: 4, strokeOpacity: 0.65 }}
@@ -333,10 +333,10 @@ function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
               {demandSpots.flatMap((s) => {
                 const color = demandColor(s.count);
                 return [
-                  <Circle key={`${s.lat},${s.lng}-o`} center={{ lat: s.lat, lng: s.lng }}
+                  <CircleF key={`${s.lat},${s.lng}-o`} center={{ lat: s.lat, lng: s.lng }}
                     radius={100 + s.count * 20}
                     options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.11 }} />,
-                  <Circle key={`${s.lat},${s.lng}-i`} center={{ lat: s.lat, lng: s.lng }}
+                  <CircleF key={`${s.lat},${s.lng}-i`} center={{ lat: s.lat, lng: s.lng }}
                     radius={45 + s.count * 8}
                     options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.30 }} />,
                 ];

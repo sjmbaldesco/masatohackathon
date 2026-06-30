@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { getDoc, doc } from "firebase/firestore";
-import { GoogleMap, Marker, Polyline, DirectionsRenderer, OverlayView } from "@react-google-maps/api";
+import { GoogleMap, Marker, PolylineF, DirectionsRenderer, OverlayView } from "@react-google-maps/api";
 import {
   Home, Map, User, LogOut, X, ChevronRight,
   Clock, Search, MapPin, Bus, Mic, LocateFixed,
@@ -237,7 +237,7 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
                 }}
               />
             ) : (
-              <Polyline
+              <PolylineF
                 path={DEMO_POLYLINE.map(([lat, lng]) => ({ lat, lng }))}
                 options={{ strokeColor: "#EF233C", strokeWeight: 3, strokeOpacity: 0.6 }}
               />
@@ -522,7 +522,7 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
               }}
             />
           ) : (
-            <Polyline
+            <PolylineF
               path={DEMO_POLYLINE.map(([lat, lng]) => ({ lat, lng }))}
               options={{ strokeColor: "#EF233C", strokeWeight: 3, strokeOpacity: 0.55 }}
             />

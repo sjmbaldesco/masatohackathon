@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { GoogleMap, OverlayView, Polyline, Circle } from "@react-google-maps/api";
+import { GoogleMap, OverlayView, PolylineF, CircleF } from "@react-google-maps/api";
 import {
   Home, Navigation, DollarSign, MoreHorizontal,
   MapPin, Gauge, Users, Zap, ChevronRight, LogOut,
@@ -389,7 +389,7 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
           >
             {/* Route polyline — always visible, brighter when in transit */}
             {polylinePath.length > 1 && (
-              <Polyline key={polylinePath.length} path={polylinePath} options={polylineOptions} />
+              <PolylineF key={polylinePath.length} path={polylinePath} options={polylineOptions} />
             )}
 
             {/* Density heatmap — two concentric circles per stop, cool-to-hot gradient */}
@@ -397,10 +397,10 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
               const cnt = s.count;
               const color = demandColor(cnt);
               return [
-                <Circle key={`${s.id}-o`} center={{ lat: s.lat, lng: s.lng }}
+                <CircleF key={`${s.id}-o`} center={{ lat: s.lat, lng: s.lng }}
                   radius={100 + cnt * 20}
                   options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.11 }} />,
-                <Circle key={`${s.id}-i`} center={{ lat: s.lat, lng: s.lng }}
+                <CircleF key={`${s.id}-i`} center={{ lat: s.lat, lng: s.lng }}
                   radius={45 + cnt * 8}
                   options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.30 }} />,
               ];
