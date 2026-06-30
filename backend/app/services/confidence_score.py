@@ -2,69 +2,107 @@
 Departure Confidence Score computation.
 
 Strategy:
-  1. Gather live inputs: passengers waiting along route, driver's current occupancy.
-  2. Get travel time via ORS Directions API (TODO: wire up once terminal coords are resolved).
-  3. Build Gemini prompt with live + historical data.
-  4. Parse Gemini response and return structured score.
-
-Fallback: if Gemini fails, compute a simple heuristic score.
+  1. Deterministic base score from occupancy + demand + idle time.
+  2. Gemini provides a bounded adjustment (-10..+10) with a short reason.
+  3. Soft-fail to the base score if Gemini times out or errors.
+  4. 30-second in-process cache per driver to avoid hammering Gemini on every tick.
 """
 import re
+import math
+import time
 from app.services import firebase_service, gemini_service
 
 FARE_PER_PASSENGER_PHP = 15.0
 JEEP_CAPACITY = 18
+_CACHE: dict[str, tuple[dict, float]] = {}
+_CACHE_TTL_S = 30
 
 
 def compute(driver_id: str, driver_doc: dict) -> dict:
-    route = driver_doc.get("route", "")
-    lat = driver_doc.get("lat", 14.5995)
-    lng = driver_doc.get("lng", 120.9842)
-    on_board = driver_doc.get("occupancy", 0)
+    cached, ts = _CACHE.get(driver_id, ({}, 0.0))
+    if cached and time.time() - ts < _CACHE_TTL_S:
+        return cached
 
-    # 1. Count waiting passengers along route
+    route = driver_doc.get("route", "")
+    on_board = int(driver_doc.get("occupancy_count", driver_doc.get("occupancy", 0)))
+
+    # Minutes since the driver last updated their position
+    mins_idle = _minutes_idle(driver_doc.get("last_updated"))
+
     waiting = firebase_service.query_collection(
         "passengers", [("route", "==", route), ("status", "==", "waiting")]
     )
     waiting_count = len(waiting)
-    total_potential = on_board + waiting_count
 
-    # 2. Get travel time from the cached route doc (seeded by generate_route_polyline)
     route_doc = firebase_service.get_doc("routes", route) if route else None
     travel_time_min = int((route_doc or {}).get("travel_time_min", 35))
 
-    # 3. Gemini scoring
-    try:
-        prompt = gemini_service.build_confidence_prompt(
-            waiting_count=waiting_count,
-            historical_avg=12.0,   # TODO: pull from historical analytics
-            travel_time_min=travel_time_min,
-            fare_php=FARE_PER_PASSENGER_PHP,
-        )
-        raw = gemini_service.ask_gemini(prompt)
-        score, expected_pax, expected_revenue, recommendation = _parse_confidence_response(raw)
-    except Exception:
-        # Heuristic fallback
-        fill_ratio = total_potential / JEEP_CAPACITY
-        score = min(int(fill_ratio * 100), 100)
-        expected_pax = f"{total_potential}"
-        expected_revenue = total_potential * FARE_PER_PASSENGER_PHP
-        recommendation = "Depart Now" if score >= 70 else "Wait"
+    base = _base_confidence(on_board, JEEP_CAPACITY, waiting_count, mins_idle)
 
-    return {
+    try:
+        prompt = _adjustment_prompt(base, on_board, JEEP_CAPACITY, waiting_count, mins_idle)
+        raw = gemini_service.ask_gemini(prompt)
+        adj, recommendation = _parse_adjustment(raw)
+        adj = max(-10, min(10, adj))
+        score = max(0, min(100, base + adj))
+    except Exception:
+        score = base
+        recommendation = "Depart Now" if score >= 70 else "Wait a bit longer"
+
+    total_potential = on_board + waiting_count
+    result = {
         "driver_id": driver_id,
         "score": score,
-        "expected_passengers": expected_pax,
+        "expected_passengers": str(total_potential),
         "travel_time_min": travel_time_min,
-        "expected_revenue": expected_revenue,
+        "expected_revenue": total_potential * FARE_PER_PASSENGER_PHP,
         "recommendation": recommendation,
     }
+    _CACHE[driver_id] = (result, time.time())
+    return result
 
 
-def _parse_confidence_response(raw: str) -> tuple:
-    """Parse structured Gemini output into (score, pax_range, revenue, recommendation)."""
-    score = int(re.search(r"SCORE:\s*(\d+)", raw).group(1))
-    expected_pax = re.search(r"EXPECTED_PAX:\s*(.+)", raw).group(1).strip()
-    expected_revenue = float(re.search(r"EXPECTED_REVENUE:\s*([\d.]+)", raw).group(1))
-    recommendation = re.search(r"RECOMMENDATION:\s*(.+)", raw).group(1).strip()
-    return score, expected_pax, expected_revenue, recommendation
+def _base_confidence(on_board: int, capacity: int, waiting: int, mins_idle: float) -> int:
+    """Deterministic 0-100 score based on load and idle pressure."""
+    fill = min((on_board + waiting) / capacity, 1.0)
+    load_score = int(math.pow(fill, 0.7) * 85)
+    idle_bonus = min(int(mins_idle * 3), 15)
+    return min(load_score + idle_bonus, 100)
+
+
+def _minutes_idle(last_updated) -> float:
+    try:
+        from datetime import datetime, timezone
+        if last_updated is None:
+            return 0.0
+        if isinstance(last_updated, str):
+            dt = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+        else:
+            dt = last_updated
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() / 60
+    except Exception:
+        return 0.0
+
+
+def _adjustment_prompt(base: int, on_board: int, capacity: int, waiting: int, mins_idle: float) -> str:
+    return (
+        f"You are a jeepney dispatch AI for Pasada (Philippine transport app).\n\n"
+        f"Situation:\n"
+        f"- On board: {on_board}/{capacity}\n"
+        f"- Waiting at stops ahead: {waiting}\n"
+        f"- Driver idle: {mins_idle:.1f} min\n"
+        f"- Base departure confidence: {base}/100\n\n"
+        f"Give a BOUNDED ADJUSTMENT from -10 to +10 and a short recommendation (max 6 words).\n"
+        f"Consider: rush hour, earnings, fairness to waiting passengers.\n\n"
+        f"Reply in EXACTLY this format:\n"
+        f"ADJUSTMENT: <integer>\n"
+        f"RECOMMENDATION: <phrase>"
+    )
+
+
+def _parse_adjustment(raw: str) -> tuple[int, str]:
+    adj = int(re.search(r"ADJUSTMENT:\s*([+-]?\d+)", raw).group(1))
+    rec = re.search(r"RECOMMENDATION:\s*(.+)", raw).group(1).strip()
+    return adj, rec

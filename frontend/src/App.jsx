@@ -7,6 +7,7 @@ import PassengerAdminLogin from "./pages/PassengerAdminLogin";
 import DriverLoginPage from "./pages/DriverLoginPage";
 import ProtectedRoute from "./components/shared/ProtectedRoute";
 import LoadingSpinner from "./components/shared/LoadingSpinner";
+import ErrorBoundary from "./components/shared/ErrorBoundary";
 import { useAuth } from "./context/AuthContext";
 
 export default function App() {
@@ -17,39 +18,41 @@ export default function App() {
   }
 
   return (
-    <Routes>
-      <Route path="/"                  element={<RoleSelect />} />
-      <Route path="/login"             element={<Navigate to="/" replace />} />
-      <Route path="/login/driver"      element={<DriverLoginPage />} />
-      <Route path="/login/:role"       element={<PassengerAdminLogin />} />
+    <ErrorBoundary>
+      <Routes>
+        <Route path="/"                  element={<RoleSelect />} />
+        <Route path="/login"             element={<Navigate to="/" replace />} />
+        <Route path="/login/driver"      element={<DriverLoginPage />} />
+        <Route path="/login/:role"       element={<PassengerAdminLogin />} />
 
-      <Route
-        path="/passenger"
-        element={
-          <ProtectedRoute roles={["passenger"]}>
-            <PassengerPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/driver"
-        element={
-          <ProtectedRoute roles={["driver"]}>
-            <DriverPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/admin"
-        element={
-          <ProtectedRoute roles={["admin"]}>
-            <AdminDashboard />
-          </ProtectedRoute>
-        }
-      />
+        <Route
+          path="/passenger"
+          element={
+            <ProtectedRoute roles={["passenger"]}>
+              <PassengerPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/driver"
+          element={
+            <ProtectedRoute roles={["driver"]}>
+              <DriverPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute roles={["admin"]}>
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
 
-      <Route path="/coop" element={<Navigate to="/admin" replace />} />
-      <Route path="*"     element={<Navigate to="/" replace />} />
-    </Routes>
+        <Route path="/coop" element={<Navigate to="/admin" replace />} />
+        <Route path="*"     element={<Navigate to="/" replace />} />
+      </Routes>
+    </ErrorBoundary>
   );
 }

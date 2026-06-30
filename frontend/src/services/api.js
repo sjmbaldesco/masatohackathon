@@ -46,4 +46,8 @@ export const getPassengerRecommendation = (data) =>
   // POST { stop, route } → { recommendation }
   api.post("/ai/passenger-tip", data);
 
+export const getAnalyticsInsights = (data) =>
+  // POST { active_drivers, total_waiting, avg_occupancy_pct, route } → { insights: string[] }
+  api.post("/ai/analytics/insights", data, { timeout: 10_000 });
+
 export default api;

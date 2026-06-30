@@ -1,14 +1,16 @@
-import { useState, useMemo } from "react";
-import { GoogleMap, Marker, InfoWindow, Polyline, HeatmapLayer } from "@react-google-maps/api";
+import { useState, useMemo, useEffect, useRef } from "react";
+import * as XLSX from "xlsx";
+import { GoogleMap, Marker, InfoWindow, Polyline, Circle } from "@react-google-maps/api";
 import {
   LayoutDashboard, Activity, Truck, Users, Map,
   UserCheck, BarChart2, Settings, Bus, LogOut,
   TrendingUp, TrendingDown, Filter, Plus, X,
   ChevronRight, MapPin, Zap, AlertTriangle, Info,
-  Star, Clock, Navigation,
+  Star, Clock, Navigation, Download,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useCollection } from "../hooks/useFirestore";
+import { getAnalyticsInsights } from "../services/api";
 import { DEFAULT_CENTER, MAPS_API_KEY, occupancyColor, GRAY_MAP_STYLE } from "../services/maps";
 import KPICards from "../components/cooperative/KPICards";
 import AIInsights from "../components/cooperative/AIInsights";
@@ -34,8 +36,8 @@ export default function AdminDashboard() {
   const { logout }           = useAuth();
   const [active, setActive]  = useState("dashboard");
 
-  const { data: drivers    } = useCollection("drivers");
-  const { data: passengers } = useCollection("passengers", [["status", "==", "waiting"]]);
+  const { data: drivers    } = useCollection("drivers",    [["route",  "==", "R01"]]);
+  const { data: passengers } = useCollection("passengers", [["route",  "==", "R01"], ["status", "==", "waiting"]]);
   const { data: stops      } = useCollection("stops");
   const { data: routes     } = useCollection("routes");
 
@@ -50,12 +52,12 @@ export default function AdminDashboard() {
 
   const content = {
     dashboard: <DashboardPage kpis={kpis} drivers={drivers} passengers={passengers} />,
-    "live-ops": <LiveOpsPage drivers={drivers} passengers={passengers} routes={routes} />,
+    "live-ops": <LiveOpsPage drivers={drivers} passengers={passengers} routes={routes} isActive={active === "live-ops"} />,
     fleet:      <FleetPage drivers={drivers} />,
     drivers:    <DriversPage drivers={drivers} />,
     routes:     <RoutesPage routes={routes} stops={stops} passengers={passengers} />,
     demand:     <DemandPage stops={stops} passengers={passengers} />,
-    analytics:  <AnalyticsPage kpis={kpis} drivers={drivers} />,
+    analytics:  <AnalyticsPage kpis={kpis} drivers={drivers} stops={stops} passengers={passengers} />,
     settings:   <SettingsPage />,
   };
 
@@ -248,8 +250,16 @@ function DashboardPage({ kpis, drivers, passengers }) {
 
 // ── Live Operations Page ───────────────────────────────────────────────────────
 
-function LiveOpsPage({ drivers, passengers, routes = [] }) {
+function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
   const [selectedDriver, setSelectedDriver] = useState(null);
+  const mapRef = useRef(null);
+
+  // Trigger a resize when the tab becomes visible so the map fills its container
+  useEffect(() => {
+    if (isActive && mapRef.current && window.google?.maps) {
+      window.google.maps.event.trigger(mapRef.current, "resize");
+    }
+  }, [isActive]);
 
   const activeDrivers = drivers.filter((d) => d.lat && d.lng);
   const waitingPassengers = passengers.filter((p) => p.lat && p.lng);
@@ -269,13 +279,23 @@ function LiveOpsPage({ drivers, passengers, routes = [] }) {
     anchor: { x: 12, y: 22 },
   } : undefined;
 
-  const heatmapData = useMemo(() => {
-    if (!window.google?.maps) return [];
-    return waitingPassengers.map((p) => ({
-      location: new window.google.maps.LatLng(p.lat, p.lng),
-      weight: 1,
-    }));
-  }, [waitingPassengers.length]);
+  // Aggregate passengers by approximate position (≈11m grid) for density coloring
+  const demandSpots = useMemo(() => {
+    const map = new Map();
+    for (const p of waitingPassengers) {
+      const key = `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
+      if (!map.has(key)) map.set(key, { lat: p.lat, lng: p.lng, count: 0 });
+      map.get(key).count++;
+    }
+    return [...map.values()];
+  }, [waitingPassengers]);
+
+  function demandColor(cnt) {
+    if (cnt <= 2) return "#2563EB";
+    if (cnt <= 4) return "#0D9488";
+    if (cnt <= 7) return "#F97316";
+    return "#D90429";
+  }
 
   return (
     <div className="p-8 space-y-4">
@@ -293,6 +313,7 @@ function LiveOpsPage({ drivers, passengers, routes = [] }) {
               center={DEFAULT_CENTER}
               zoom={12}
               options={MAP_OPTIONS}
+              onLoad={(map) => { mapRef.current = map; }}
             >
               {/* Route polyline */}
               {routePolyline.length > 1 && (
@@ -302,13 +323,18 @@ function LiveOpsPage({ drivers, passengers, routes = [] }) {
                 />
               )}
 
-              {/* Passenger demand heatmap */}
-              {heatmapData.length > 0 && (
-                <HeatmapLayer
-                  data={heatmapData}
-                  options={{ radius: 30, opacity: 0.7 }}
-                />
-              )}
+              {/* Density heatmap — two concentric circles, cool-to-hot by passenger count */}
+              {demandSpots.flatMap((s) => {
+                const color = demandColor(s.count);
+                return [
+                  <Circle key={`${s.lat},${s.lng}-o`} center={{ lat: s.lat, lng: s.lng }}
+                    radius={100 + s.count * 20}
+                    options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.11 }} />,
+                  <Circle key={`${s.lat},${s.lng}-i`} center={{ lat: s.lat, lng: s.lng }}
+                    radius={45 + s.count * 8}
+                    options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.30 }} />,
+                ];
+              })}
 
               {/* Driver/jeep markers — colored by occupancy */}
               {activeDrivers.map((d) => {
@@ -868,15 +894,95 @@ function DemandPage({ stops, passengers }) {
 
 // ── Analytics Page ─────────────────────────────────────────────────────────────
 
-function AnalyticsPage({ kpis, drivers }) {
+function AnalyticsPage({ kpis, drivers, stops = [], passengers = [] }) {
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const now = new Date().toLocaleString("en-PH", { timeZone: "Asia/Manila" });
+      const wb = XLSX.utils.book_new();
+
+      // ─ Summary sheet ─
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+        ["Pasada Fleet Report", "", now],
+        [],
+        ["Metric", "Value"],
+        ["Total Active Drivers", kpis.activeDrivers],
+        ["Waiting Passengers",   kpis.totalWaiting],
+        ["Avg Occupancy %",      kpis.avgOccupancyPct],
+        ["Total Drivers",        kpis.totalDrivers],
+      ]), "Summary");
+
+      // ─ Drivers sheet ─
+      const driverRows = [
+        ["UID", "Plate", "Driver Name", "Status", "Occupancy %", "Speed km/h", "Current Stop"],
+        ...drivers.map((d) => [
+          d.uid ?? d.id, d.plate ?? "—", d.driver_name ?? "Driver",
+          d.status ?? "—", d.occupancy_pct ?? 0, d.speed_kmh ?? 0, d.current_stop ?? "—",
+        ]),
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(driverRows), "Drivers");
+
+      // ─ Demand sheet ─
+      const stopDemand = stops.map((s) => ({
+        name: s.name ?? s.stop ?? s.id,
+        count: s.count ?? passengers.filter((p) => p.stop === (s.name ?? s.stop)).length,
+      }));
+      const demandRows = [
+        ["Stop", "Waiting Passengers"],
+        ...stopDemand.map((s) => [s.name, s.count]),
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(demandRows), "Demand");
+
+      // ─ AI Insights sheet (soft-fail) ─
+      let insights = [
+        `Route R01: ${kpis.activeDrivers} driver(s), ${kpis.totalWaiting} waiting.`,
+        `Avg occupancy ${kpis.avgOccupancyPct}% — ${kpis.avgOccupancyPct > 70 ? "above" : "below"} optimal.`,
+        "Review dispatch intervals against live demand data.",
+      ];
+      try {
+        const res = await getAnalyticsInsights({
+          active_drivers: kpis.activeDrivers,
+          total_waiting:  kpis.totalWaiting,
+          avg_occupancy_pct: kpis.avgOccupancyPct,
+          route: "R01",
+        });
+        if (res.data?.insights?.length) insights = res.data.insights;
+      } catch (_) { /* backend unavailable — use fallback */ }
+
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+        ["AI Insights", now],
+        [],
+        ...insights.map((text, i) => [`${i + 1}.`, text]),
+      ]), "AI Insights");
+
+      XLSX.writeFile(wb, `pasada-report-${Date.now()}.xlsx`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="p-8 space-y-6">
-      <PageHeader
-        title="Analytics"
-        subtitle="Fleet performance metrics, revenue trends, and AI-powered insights."
-      />
+      <div className="flex items-start justify-between px-0 pt-0 pb-0">
+        <div>
+          <h1 className="font-garamond text-4xl font-bold text-pasada-dark">Analytics</h1>
+          <p className="mt-1 text-sm text-pasada-muted max-w-xl">
+            Fleet performance metrics, revenue trends, and AI-powered insights.
+          </p>
+        </div>
+        <button
+          onClick={handleExport}
+          disabled={exporting}
+          className="flex items-center gap-2 rounded-xl bg-pasada-dark px-4 py-2.5 text-sm font-bold text-white hover:bg-pasada-dark/90 transition-colors disabled:opacity-60"
+        >
+          <Download size={16} />
+          {exporting ? "Exporting…" : "Export to Excel"}
+        </button>
+      </div>
 
-      <div className="mt-6 grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-4 gap-4 mt-2">
         <KpiCard label="Weekly Revenue"   value="₱24,840"  sub="+8% vs last week"  trend="up"   icon={TrendingUp}  />
         <KpiCard label="Total Trips"       value="247"      sub="+15 vs last week"  trend="up"   icon={Navigation}  />
         <KpiCard label="Avg Occupancy"     value={`${kpis.avgOccupancyPct}%`}       sub="fleet average"         icon={Users}       />

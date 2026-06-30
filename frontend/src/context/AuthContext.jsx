@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -22,16 +22,16 @@ export function AuthProvider({ children }) {
   const [role,      setRole]      = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [authError, setAuthError] = useState(null);
-  // Tracks whether the first onAuthStateChanged event has fired.
-  // After initialization, role is managed by _persistRole — subsequent
-  // auth events (from signIn calls) must NOT overwrite it by re-reading Firestore.
-  const initializedRef = useRef(false);
-
   useEffect(() => {
+    // Closure-local flag — immune to React 18 Strict Mode double-mount.
+    // Each effect run gets its own `initialized`, so page-reload Firestore
+    // reads always happen on the first event of EACH subscription lifetime.
+    let initialized = false;
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        if (!initializedRef.current) {
-          // App init / page reload: restore role from Firestore
+        if (!initialized) {
+          // First event for this subscription: restore role from Firestore
           try {
             const snap = await getDoc(doc(db, "users", firebaseUser.uid));
             if (snap.exists()) setRole(snap.data().role ?? null);
@@ -39,13 +39,13 @@ export function AuthProvider({ children }) {
             console.error("AuthContext Firestore read error:", err);
           }
         }
-        // Subsequent login events: role already set by _persistRole — leave it alone
+        // Subsequent events (login): role was already set by _persistRole
         setUser(firebaseUser);
       } else {
         setUser(null);
         setRole(null);
       }
-      initializedRef.current = true;
+      initialized = true;
       setLoading(false);
     });
     return unsubscribe;
@@ -71,7 +71,9 @@ export function AuthProvider({ children }) {
       try {
         cred = await signInWithEmailAndPassword(auth, email, password);
       } catch (err) {
-        if (err.code === "auth/user-not-found" || err.code === "auth/invalid-credential") {
+        // Only create a new account when the email genuinely doesn't exist.
+        // auth/invalid-credential can mean wrong password for an existing account.
+        if (err.code === "auth/user-not-found") {
           cred = await createUserWithEmailAndPassword(auth, email, password);
         } else {
           throw err;

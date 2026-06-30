@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from "react";
+import { getDoc, doc } from "firebase/firestore";
 import { GoogleMap, Marker, Polyline, DirectionsRenderer, OverlayView } from "@react-google-maps/api";
 import {
   Home, Map, User, LogOut, X, ChevronRight,
-  Clock, Search, MapPin, Bus, Mic,
+  Clock, Search, MapPin, Bus, Mic, LocateFixed,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useCollection } from "../hooks/useFirestore";
 import { broadcastWaiting, cancelWaiting } from "../services/api";
+import { db } from "../services/firebase";
 import TabBar from "../components/shared/TabBar";
 import {
   DEFAULT_CENTER, ROUTE_STOPS, DEMO_POLYLINE, GRAY_MAP_STYLE,
@@ -42,6 +44,22 @@ export default function PassengerPage() {
     );
     return () => navigator.geolocation.clearWatch(id);
   }, []);
+
+  // Restore waiting state on mount (in case of page reload)
+  useEffect(() => {
+    if (!user?.uid) return;
+    let cancelled = false;
+    getDoc(doc(db, "passengers", user.uid)).then((snap) => {
+      if (cancelled || !snap.exists()) return;
+      const data = snap.data();
+      if (data.status === "waiting") {
+        setIsWaiting(true);
+        const stop = ROUTE_STOPS.find((s) => s.name === data.stop);
+        if (stop) setSelectedStop(stop);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [user?.uid]);
 
   const { data: drivers } = useCollection("drivers", [["route", "==", ROUTE_ID]]);
   const activeDrivers     = drivers.filter((d) => d.status !== "ended" && d.lat && d.lng);
@@ -187,11 +205,12 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
     );
   }, [selectedStop?.id, !!nearestJeep?.lat]);
 
-  // Auto-pan to jeep as it moves
-  useEffect(() => {
-    if (!nearestJeep?.lat || !mapRef.current) return;
-    mapRef.current.panTo({ lat: nearestJeep.lat, lng: nearestJeep.lng });
-  }, [nearestJeep?.lat, nearestJeep?.lng]);
+  function recenterOnJeep() {
+    if (nearestJeep?.lat && mapRef.current)
+      mapRef.current.panTo({ lat: nearestJeep.lat, lng: nearestJeep.lng });
+    else if (userLocation && mapRef.current)
+      mapRef.current.panTo(userLocation);
+  }
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -306,6 +325,9 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
         </div>
       </div>
 
+      {/* Recenter button */}
+      <RecenterButton onClick={recenterOnJeep} />
+
       {/* Bottom sheet */}
       <div
         className="absolute bottom-0 inset-x-0 z-10"
@@ -395,36 +417,27 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
             </div>
           </div>
 
-          {/* Wait / Cancel buttons */}
-          {!isWaiting ? (
-            <button
-              onClick={onWait}
-              className="w-full rounded-2xl bg-pasada-rust py-4 text-base font-bold text-white shadow-sm hover:bg-pasada-rust/90 transition-colors"
-            >
-              I'm waiting at {selectedStop?.name ?? "…"}
-            </button>
-          ) : (
-            <>
-              <div className="flex gap-3">
-                <button
-                  onClick={onCancel}
-                  className="flex-1 flex items-center justify-center gap-2 rounded-2xl border-2 border-pasada-rust bg-white py-3.5 text-sm font-bold text-pasada-rust"
-                >
-                  <X size={15} />
-                  Cancel Wait
-                </button>
-                <button
-                  onClick={onShowDetails}
-                  className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-pasada-dark py-3.5 text-sm font-bold text-white"
-                >
-                  Jeepney Details
-                  <ChevronRight size={15} />
-                </button>
-              </div>
-              <p className="text-center text-xs text-pasada-muted">
-                Your wait is broadcast · Driver sees your stop
-              </p>
-            </>
+          {/* Signal toggle button */}
+          <button
+            onClick={isWaiting ? onCancel : onWait}
+            className={`w-full rounded-2xl py-4 text-base font-bold shadow-sm transition-colors ${
+              isWaiting
+                ? "bg-pasada-rust text-white hover:bg-pasada-rust/90"
+                : "border-2 border-pasada-muted/40 bg-white/70 text-pasada-muted hover:border-pasada-rust hover:text-pasada-rust"
+            }`}
+          >
+            {isWaiting ? `Waiting at ${selectedStop?.name ?? "…"}` : "Signal"}
+          </button>
+          {isWaiting && (
+            <div className="flex items-center justify-between px-1">
+              <p className="text-xs text-pasada-muted">Tap again to cancel · Driver sees your stop</p>
+              <button
+                onClick={onShowDetails}
+                className="flex items-center gap-1 text-xs font-bold text-pasada-dark hover:text-pasada-rust transition-colors"
+              >
+                Details <ChevronRight size={12} />
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -561,6 +574,9 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
         </div>
       )}
 
+      {/* Recenter on user GPS */}
+      <RecenterButton onClick={() => userLocation && mapRef.current?.panTo(userLocation)} />
+
       {/* Tapped stop bottom panel */}
       {tappedStop && (
         <div className="absolute bottom-0 inset-x-0 z-20 px-4 pb-4">
@@ -606,10 +622,30 @@ function PersonMarker({ position }) {
       mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
       getPixelPositionOffset={(w, h) => ({ x: -w / 2, y: -h / 2 })}
     >
-      <div className="flex size-9 items-center justify-center rounded-full bg-[#2563eb] border-2 border-white shadow-md">
-        <User size={16} className="text-white" />
+      <div className="flex size-10 items-center justify-center rounded-full bg-[#2563eb] border-2 border-white shadow-lg">
+        {/* person-standing stick figure */}
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="5" r="2" fill="white" stroke="none"/>
+          <line x1="12" y1="7" x2="12" y2="15"/>
+          <line x1="8.5" y1="10" x2="15.5" y2="10"/>
+          <line x1="12" y1="15" x2="9" y2="21"/>
+          <line x1="12" y1="15" x2="15" y2="21"/>
+        </svg>
       </div>
     </OverlayView>
+  );
+}
+
+// ── Recenter Button ───────────────────────────────────────────────────────────
+
+function RecenterButton({ onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="absolute bottom-6 right-4 z-10 flex size-12 items-center justify-center rounded-full bg-white shadow-lg border border-pasada-border hover:shadow-xl transition-shadow"
+    >
+      <LocateFixed size={20} className="text-pasada-dark" />
+    </button>
   );
 }
 

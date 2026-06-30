@@ -1,5 +1,5 @@
 export const MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-export const LIBRARIES = ["visualization"];
+export const LIBRARIES = [];
 
 // Shared gray map style matching the 2B2D42/8D99AE/EDF2F4 palette
 export const GRAY_MAP_STYLE = [

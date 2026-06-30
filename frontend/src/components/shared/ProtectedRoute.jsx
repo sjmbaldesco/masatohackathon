@@ -4,18 +4,20 @@ import LoadingSpinner from "./LoadingSpinner";
 
 const ROLE_ROUTES = {
   passenger: "/passenger",
-  driver: "/driver",
-  admin: "/admin",
+  driver:    "/driver",
+  admin:     "/admin",
 };
 
+const norm = (r) => (r ?? "").toString().trim().toLowerCase();
+
 export default function ProtectedRoute({ children, roles = [] }) {
-  const { role, loading } = useAuth();
+  const { user, role, loading } = useAuth();
 
   if (loading) return <LoadingSpinner />;
-  // Gate on role — set synchronously by selectRole before navigation
-  if (!role) return <Navigate to="/" replace />;
-  if (roles.length > 0 && !roles.includes(role)) {
-    return <Navigate to={ROLE_ROUTES[role] ?? "/"} replace />;
+  if (!user)   return <Navigate to="/" replace />;
+
+  if (roles.length > 0 && !roles.map(norm).includes(norm(role))) {
+    return <Navigate to={ROLE_ROUTES[norm(role)] ?? "/"} replace />;
   }
 
   return children;

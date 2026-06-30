@@ -14,20 +14,28 @@ function closestStop(lat, lng, stops = ROUTE_STOPS) {
   return best.name;
 }
 
-// Handles both [[lat, lng]] arrays and [{lat, lng}] objects from Firestore
 function getLatLng(p) {
   if (Array.isArray(p)) return [p[0], p[1]];
   return [p.lat, p.lng];
 }
 
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 /**
- * Animate a jeep along a polyline and write position to Firestore every second.
+ * Animate a jeep along a polyline and write position to Firestore every 500 ms.
+ * Uses proper haversine distance so speed in km/h is accurate regardless of route direction.
  * Cycles back to the start when it reaches the end of the route.
- * @param {string} driverId - Firestore document ID under drivers/
- * @param {Array} polyline - [[lat, lng], ...] or [{lat, lng}, ...] from Firestore
- * @param {number} speedKmh
  */
-export function startSim(driverId, polyline, speedKmh = 30) {
+export function startSim(driverId, polyline, speedKmh = 50) {
   stopSim(driverId);
 
   if (!polyline || polyline.length < 2) {
@@ -35,38 +43,36 @@ export function startSim(driverId, polyline, speedKmh = 30) {
     return;
   }
 
-  const TICK_MS = 500;
-  const degPerTick = (speedKmh / 3600 / 111) * (TICK_MS / 1000);
+  // Pre-compute cumulative distances in metres along the polyline
+  const pts = polyline.map(getLatLng);
+  const cumDist = [0];
+  for (let i = 1; i < pts.length; i++) {
+    cumDist.push(
+      cumDist[i - 1] + haversineMeters(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1])
+    );
+  }
+  const totalMeters = cumDist[cumDist.length - 1];
+  if (totalMeters === 0) { console.warn("startSim: zero-length polyline"); return; }
 
-  let segIdx = 0;
-  let t = 0;
+  const TICK_MS = 500;
+  const metersPerTick = (speedKmh * 1000 / 3600) * (TICK_MS / 1000);
+  let distTravelled = 0;
 
   activeTimers[driverId] = setInterval(async () => {
-    // Loop back to start when reaching the end
-    if (segIdx >= polyline.length - 1) {
-      segIdx = 0;
-      t = 0;
-      return;
+    distTravelled = (distTravelled + metersPerTick) % totalMeters;
+
+    // Binary search: find segment index where cumDist[lo] <= distTravelled < cumDist[lo+1]
+    let lo = 0, hi = cumDist.length - 2;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (cumDist[mid] <= distTravelled) lo = mid;
+      else hi = mid - 1;
     }
 
-    const [lat1, lng1] = getLatLng(polyline[segIdx]);
-    const [lat2, lng2] = getLatLng(polyline[segIdx + 1]);
-    const segLen = Math.hypot(lat2 - lat1, lng2 - lng1);
-
-    if (segLen === 0) { segIdx++; return; }
-
-    t += degPerTick / segLen;
-
-    if (t >= 1) {
-      segIdx++;
-      t = 0;
-      if (segIdx >= polyline.length - 1) return;
-    }
-
-    const p1 = getLatLng(polyline[segIdx]);
-    const p2 = getLatLng(polyline[segIdx + 1] ?? polyline[segIdx]);
-    const lat = p1[0] + (p2[0] - p1[0]) * t;
-    const lng = p1[1] + (p2[1] - p1[1]) * t;
+    const segLen = cumDist[lo + 1] - cumDist[lo];
+    const frac = segLen > 0 ? (distTravelled - cumDist[lo]) / segLen : 0;
+    const lat = pts[lo][0] + (pts[lo + 1][0] - pts[lo][0]) * frac;
+    const lng = pts[lo][1] + (pts[lo + 1][1] - pts[lo][1]) * frac;
     const currentStop = closestStop(lat, lng);
 
     try {

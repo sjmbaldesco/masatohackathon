@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { GoogleMap, OverlayView, Polyline, HeatmapLayer } from "@react-google-maps/api";
+import { GoogleMap, OverlayView, Polyline, Circle } from "@react-google-maps/api";
 import {
   Home, Navigation, DollarSign, MoreHorizontal,
   MapPin, Gauge, Users, Zap, ChevronRight, LogOut,
-  Clock, Bus,
+  Clock, Bus, LocateFixed,
 } from "lucide-react";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useAuth } from "../context/AuthContext";
@@ -49,6 +49,7 @@ export default function DriverPage() {
   const [showModal, setShowModal] = useState(false);
   const [scoreData, setScoreData] = useState(null);
   const [scoreLoading, setScoreLoading] = useState(false);
+  const [scoreUnavailable, setScoreUnavailable] = useState(false);
   const mapRef = useRef(null);
 
   const { data: driverDocs } = useCollection("drivers", [["uid", "==", user?.uid ?? "__none__"]]);
@@ -128,11 +129,13 @@ export default function DriverPage() {
 
   async function fetchScore() {
     setScoreLoading(true);
+    setScoreUnavailable(false);
     try {
       const res = await getDepartureScore(user.uid);
       setScoreData(res.data);
     } catch (e) {
-      console.error(e);
+      console.error("Departure score unavailable:", e.message);
+      setScoreUnavailable(true);
     } finally {
       setScoreLoading(false);
     }
@@ -154,6 +157,7 @@ export default function DriverPage() {
           route={route}
           scoreData={scoreData}
           scoreLoading={scoreLoading}
+          scoreUnavailable={scoreUnavailable}
           onFetchScore={fetchScore}
           onStartTrip={handleStartTrip}
           onEndTrip={handleEndTrip}
@@ -175,6 +179,57 @@ export default function DriverPage() {
         />
       )}
     </div>
+  );
+}
+
+// ── Animated jeepney marker ───────────────────────────────────────────────────
+// Stable offset — defined at module scope so it never triggers unnecessary re-renders
+const JEEP_PIXEL_OFFSET = (w, h) => ({ x: -(w / 2), y: -(h - 4) });
+
+/**
+ * Interpolates the jeepney SVG marker at 60fps between 500ms Firestore updates.
+ * Also drives the map camera via setCenter so the view follows the marker smoothly.
+ */
+function AnimatedJeepMarker({ targetLat, targetLng, mapRef }) {
+  const [pos, setPos] = useState({ lat: targetLat, lng: targetLng });
+  const currentPos = useRef({ lat: targetLat, lng: targetLng });
+  const rafRef     = useRef(null);
+
+  useEffect(() => {
+    if (targetLat == null || targetLng == null) return;
+
+    const from     = { ...currentPos.current };
+    const to       = { lat: targetLat, lng: targetLng };
+    const t0       = performance.now();
+    const DURATION = 460; // slightly under the 500ms sim tick
+
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+    function step(now) {
+      const t    = Math.min((now - t0) / DURATION, 1);
+      const ease = 1 - (1 - t) * (1 - t); // ease-out quad
+      const next = {
+        lat: from.lat + (to.lat - from.lat) * ease,
+        lng: from.lng + (to.lng - from.lng) * ease,
+      };
+      currentPos.current = next;
+      setPos({ ...next });
+      if (mapRef.current) mapRef.current.setCenter(next);
+      if (t < 1) rafRef.current = requestAnimationFrame(step);
+    }
+
+    rafRef.current = requestAnimationFrame(step);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [targetLat, targetLng]);
+
+  return (
+    <OverlayView
+      position={pos}
+      mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+      getPixelPositionOffset={JEEP_PIXEL_OFFSET}
+    >
+      <JeepneyMarker />
+    </OverlayView>
   );
 }
 
@@ -294,12 +349,11 @@ function JeepneyMarker() {
 
 // ── Map Home Tab (always shows map) ───────────────────────────────────────────
 
-function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWaiting, stops, occCount, occHex, route, scoreData, scoreLoading, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
-  // Auto-pan as driver moves
+function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWaiting, stops, occCount, occHex, route, scoreData, scoreLoading, scoreUnavailable, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
+  // Auto-fetch departure score once when idle
   useEffect(() => {
-    if (!mapRef.current || !driver.lat || !driver.lng) return;
-    mapRef.current.panTo({ lat: driver.lat, lng: driver.lng });
-  }, [driver.lat, driver.lng]);
+    if (!tripActive) onFetchScore();
+  }, []);
 
   const polylinePath = useMemo(
     () => polyline.map((p) => Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }),
@@ -311,18 +365,13 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
     [tripActive]
   );
 
-  const jeepPixelOffset = useMemo(() => (w, h) => ({ x: -(w / 2), y: -(h - 4) }), []);
-
-  // Heatmap data: stops weighted by waiting passenger count
-  const heatmapData = useMemo(() => {
-    if (!window.google?.maps) return [];
-    return stops
-      .filter((s) => s.lat && s.lng)
-      .map((s) => ({
-        location: new window.google.maps.LatLng(s.lat, s.lng),
-        weight: Math.max(s.count ?? 0, 0.1),
-      }));
-  }, [stops]);
+  // Demand color: sparse = blue → moderate = teal → busy = orange → hot = red
+  function demandColor(cnt) {
+    if (cnt <= 2) return "#2563EB";
+    if (cnt <= 4) return "#0D9488";
+    if (cnt <= 7) return "#F97316";
+    return "#D90429";
+  }
 
   const lumban = ROUTE_STOPS[0];
 
@@ -343,32 +392,27 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
               <Polyline path={polylinePath} options={polylineOptions} />
             )}
 
-            {/* Demand heatmap at stops */}
-            {heatmapData.length > 0 && (
-              <HeatmapLayer
-                data={heatmapData}
-                options={{
-                  radius: 35,
-                  opacity: 0.75,
-                  gradient: [
-                    "rgba(237,242,244,0)",
-                    "rgba(141,153,174,0.6)",
-                    "rgba(239,35,60,0.7)",
-                    "rgba(217,4,41,0.9)",
-                  ],
-                }}
-              />
-            )}
+            {/* Density heatmap — two concentric circles per stop, cool-to-hot gradient */}
+            {stops.filter((s) => s.lat && s.lng && (s.count ?? 0) > 0).flatMap((s) => {
+              const cnt = s.count;
+              const color = demandColor(cnt);
+              return [
+                <Circle key={`${s.id}-o`} center={{ lat: s.lat, lng: s.lng }}
+                  radius={100 + cnt * 20}
+                  options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.11 }} />,
+                <Circle key={`${s.id}-i`} center={{ lat: s.lat, lng: s.lng }}
+                  radius={45 + cnt * 8}
+                  options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.30 }} />,
+              ];
+            })}
 
-            {/* Jeepney marker */}
+            {/* Jeepney marker — smoothly interpolated at 60fps */}
             {driver.lat && (
-              <OverlayView
-                position={{ lat: driver.lat, lng: driver.lng }}
-                mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
-                getPixelPositionOffset={jeepPixelOffset}
-              >
-                <JeepneyMarker />
-              </OverlayView>
+              <AnimatedJeepMarker
+                targetLat={driver.lat}
+                targetLng={driver.lng}
+                mapRef={mapRef}
+              />
             )}
           </GoogleMap>
         ) : (
@@ -379,6 +423,16 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
           </div>
         )}
       </div>
+
+      {/* Recenter on jeep */}
+      {driver.lat && (
+        <button
+          onClick={() => mapRef.current?.panTo({ lat: driver.lat, lng: driver.lng })}
+          className="absolute bottom-36 right-4 z-10 flex size-12 items-center justify-center rounded-full bg-white shadow-lg border border-pasada-border hover:shadow-xl transition-shadow"
+        >
+          <LocateFixed size={20} className="text-pasada-dark" />
+        </button>
+      )}
 
       {/* Status badge */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
@@ -430,6 +484,22 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
           </div>
         )}
 
+        {/* Departure Confidence — only when idle */}
+        {!tripActive && (scoreData || scoreLoading || scoreUnavailable) && (
+          <div className="px-4 pb-2">
+            <DepartureScore
+              score={scoreData?.score ?? null}
+              expectedPassengers={String(scoreData?.expected_passengers ?? "–")}
+              travelTimeMin={scoreData?.travel_time_min ?? null}
+              expectedRevenue={scoreData?.expected_revenue ?? null}
+              recommendation={scoreData?.recommendation ?? null}
+              loading={scoreLoading}
+              unavailable={scoreUnavailable}
+              onRefresh={onFetchScore}
+            />
+          </div>
+        )}
+
         {/* Action buttons */}
         <div className="flex gap-3 px-4 pb-6">
           <button
@@ -448,7 +518,8 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
           ) : (
             <button
               onClick={onStartTrip}
-              className="flex-1 rounded-xl bg-pasada-rust py-3.5 text-sm font-bold text-white hover:bg-pasada-rust/90 transition-colors"
+              disabled={polyline.length < 2}
+              className="flex-1 rounded-xl bg-pasada-rust py-3.5 text-sm font-bold text-white hover:bg-pasada-rust/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Start Trip
             </button>

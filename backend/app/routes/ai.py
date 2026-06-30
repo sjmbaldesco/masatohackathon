@@ -1,5 +1,7 @@
 import re
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.middleware.auth_middleware import get_current_user
 from app.models.demand import (
@@ -9,6 +11,50 @@ from app.models.demand import (
 from app.services import firebase_service, gemini_service
 
 router = APIRouter()
+
+
+# ── Analytics Insights ─────────────────────────────────────────────────────────
+
+class AnalyticsInsightsRequest(BaseModel):
+    active_drivers: int = 0
+    total_waiting: int = 0
+    avg_occupancy_pct: int = 0
+    route: Optional[str] = "R01"
+
+
+class AnalyticsInsightsResponse(BaseModel):
+    insights: list[str]
+
+
+@router.post("/analytics/insights", response_model=AnalyticsInsightsResponse)
+def analytics_insights(
+    body: AnalyticsInsightsRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Generate AI narrative insights for the Excel analytics export."""
+    try:
+        prompt = (
+            f"You are an AI transport analyst for Pasada, a Philippine jeepney platform.\n\n"
+            f"Route {body.route} snapshot:\n"
+            f"- Active drivers: {body.active_drivers}\n"
+            f"- Waiting passengers: {body.total_waiting}\n"
+            f"- Average occupancy: {body.avg_occupancy_pct}%\n\n"
+            f"Give exactly 3 concise insights (1-2 sentences each) about performance, demand trends, "
+            f"and a recommendation. Number them 1., 2., 3."
+        )
+        raw = gemini_service.ask_gemini(prompt)
+        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+        insights = [re.sub(r"^\d+\.\s*", "", l) for l in lines if re.match(r"^\d+\.", l)]
+        if not insights:
+            insights = [raw]
+    except Exception:
+        occ_word = "above" if body.avg_occupancy_pct > 70 else "below"
+        insights = [
+            f"Route {body.route}: {body.active_drivers} active driver(s), {body.total_waiting} passengers waiting.",
+            f"Fleet avg occupancy {body.avg_occupancy_pct}% — {occ_word} the 70% optimal threshold.",
+            "Review dispatch intervals against live demand to improve passenger wait times.",
+        ]
+    return AnalyticsInsightsResponse(insights=insights)
 
 
 @router.post("/dispatch", response_model=DispatchRecommendation)
