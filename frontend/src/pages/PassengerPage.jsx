@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { getDoc, doc } from "firebase/firestore";
 import { GoogleMap, Marker, PolylineF, DirectionsRenderer, OverlayView } from "@react-google-maps/api";
 import {
-  Home, Map, User, LogOut, X, ChevronRight,
+  Home, Map as MapIcon, User, LogOut, X, ChevronRight,
   Clock, Search, MapPin, Bus, Mic, LocateFixed,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
@@ -20,7 +20,7 @@ const ROUTE_ID = "R01";
 
 const TABS = [
   { id: "home",    label: "HOME",    icon: Home },
-  { id: "map",     label: "MAP",     icon: Map  },
+  { id: "map",     label: "MAP",     icon: MapIcon  },
   { id: "profile", label: "PROFILE", icon: User },
 ];
 

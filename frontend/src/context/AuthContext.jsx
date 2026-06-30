@@ -23,15 +23,12 @@ export function AuthProvider({ children }) {
   const [loading,   setLoading]   = useState(true);
   const [authError, setAuthError] = useState(null);
   useEffect(() => {
-    // Closure-local flag — immune to React 18 Strict Mode double-mount.
-    // Each effect run gets its own `initialized`, so page-reload Firestore
-    // reads always happen on the first event of EACH subscription lifetime.
-    let initialized = false;
+    let lastUid = null;
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        if (!initialized) {
-          // First event for this subscription: restore role from Firestore
+        if (firebaseUser.uid !== lastUid) {
+          lastUid = firebaseUser.uid;
           try {
             const snap = await getDoc(doc(db, "users", firebaseUser.uid));
             if (snap.exists()) setRole(snap.data().role ?? null);
@@ -39,13 +36,12 @@ export function AuthProvider({ children }) {
             console.error("AuthContext Firestore read error:", err);
           }
         }
-        // Subsequent events (login): role was already set by _persistRole
         setUser(firebaseUser);
       } else {
         setUser(null);
         setRole(null);
+        lastUid = null;
       }
-      initialized = true;
       setLoading(false);
     });
     return unsubscribe;
