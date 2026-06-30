@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routes import auth, passengers, drivers, demand, confidence, ai
+from app.routes import auth, passengers, drivers, demand, confidence, ai, routes, demo
 
 app = FastAPI(
     title="Pasada API",
@@ -26,6 +26,8 @@ app.include_router(drivers.router, prefix="/drivers", tags=["Drivers"])
 app.include_router(demand.router, prefix="/demand", tags=["Demand"])
 app.include_router(confidence.router, tags=["Confidence Score"])
 app.include_router(ai.router, prefix="/ai", tags=["AI"])
+app.include_router(routes.router, prefix="/routes", tags=["Routes"])
+app.include_router(demo.router, prefix="/demo", tags=["Demo"])
 
 
 @app.get("/health")

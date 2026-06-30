@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { GoogleMap, Marker, Polyline } from "@react-google-maps/api";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { GoogleMap, OverlayView, Polyline } from "@react-google-maps/api";
 import {
   Home, Navigation, DollarSign, MoreHorizontal,
   MapPin, Gauge, Users, Zap, ChevronRight, LogOut,
@@ -138,6 +138,7 @@ export default function DriverPage() {
           polyline={polyline}
           tripActive={tripActive}
           totalWaiting={totalWaiting}
+          stops={stops}
           occCount={occCount}
           occHex={occHex}
           route={route}
@@ -167,20 +168,146 @@ export default function DriverPage() {
   );
 }
 
+// ── Stop marker with passenger count badge ────────────────────────────────────
+
+function StopMarker({ name, count }) {
+  const hasWaiting = count > 0;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", pointerEvents: "none" }}>
+      {/* Count badge — only shown when passengers are waiting */}
+      {hasWaiting && (
+        <div style={{
+          background: "#C2652A",
+          color: "#fff",
+          fontSize: 10,
+          fontWeight: 700,
+          fontFamily: "sans-serif",
+          borderRadius: 99,
+          padding: "1px 5px",
+          marginBottom: 2,
+          whiteSpace: "nowrap",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+        }}>
+          {count} waiting
+        </div>
+      )}
+      {/* Dot */}
+      <div style={{
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        background: hasWaiting ? "#C2652A" : "#9A9088",
+        border: "2px solid #fff",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+      }} />
+    </div>
+  );
+}
+
+// ── Philippine Jeepney SVG marker (fixed screen size, zoom-independent) ──────
+
+function JeepneyMarker() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 48" width="40" height="24" style={{ display: "block", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.35))" }}>
+      {/* ── Ground shadow ── */}
+      <ellipse cx="40" cy="46" rx="32" ry="3" fill="rgba(0,0,0,0.18)" />
+
+      {/* ── Roof crown / raised top (characteristic jeepney silhouette) ── */}
+      <rect x="18" y="3" width="48" height="8" rx="2" fill="#8B3515" />
+      <rect x="18" y="3" width="48" height="2" rx="1" fill="#FFD700" />
+      {/* Roof vents */}
+      <rect x="25" y="4" width="5" height="4" rx="1" fill="#6B2810" />
+      <rect x="33" y="4" width="5" height="4" rx="1" fill="#6B2810" />
+      <rect x="41" y="4" width="5" height="4" rx="1" fill="#6B2810" />
+      <rect x="49" y="4" width="5" height="4" rx="1" fill="#6B2810" />
+      {/* Hood ornament */}
+      <line x1="10" y1="10" x2="10" y2="5" stroke="#E0E0E0" strokeWidth="1.2" />
+      <polygon points="10,3 8.5,6 11.5,6" fill="#FFD700" />
+
+      {/* ── Main body ── */}
+      <rect x="2" y="10" width="76" height="24" rx="2" fill="#C2652A" />
+
+      {/* ── Chrome front grill (iconic horizontal bars) ── */}
+      <rect x="2" y="10" width="16" height="24" rx="2" fill="#9E3D10" />
+      <rect x="2" y="14" width="16" height="2"  fill="#D4D4D4" />
+      <rect x="2" y="18" width="16" height="2"  fill="#D4D4D4" />
+      <rect x="2" y="22" width="16" height="2"  fill="#D4D4D4" />
+      <rect x="2" y="26" width="16" height="2"  fill="#D4D4D4" />
+      {/* Windshield */}
+      <rect x="3" y="11" width="13" height="12" rx="1" fill="#B8E0F0" opacity="0.85" />
+      {/* Chrome grill frame */}
+      <rect x="2" y="10" width="16" height="1.5" fill="#E8E8E8" />
+
+      {/* ── Headlights ── */}
+      <rect x="2" y="13" width="2" height="5" rx="1" fill="#FFFDE7" />
+      <rect x="2" y="20" width="2" height="3" rx="1" fill="#FFFDE7" opacity="0.5" />
+
+      {/* ── Side windows ── */}
+      <rect x="20" y="12" width="12" height="11" rx="1.5" fill="#B8E0F0" opacity="0.8" />
+      <rect x="34" y="12" width="12" height="11" rx="1.5" fill="#B8E0F0" opacity="0.8" />
+      <rect x="48" y="12" width="12" height="11" rx="1.5" fill="#B8E0F0" opacity="0.8" />
+
+      {/* ── Colorful side art strips (typical jeepney decoration) ── */}
+      <rect x="20" y="24" width="12" height="4" fill="#E53935" />
+      <rect x="34" y="24" width="12" height="4" fill="#1565C0" />
+      <rect x="48" y="24" width="12" height="4" fill="#E53935" />
+
+      {/* ── Gold chrome accent stripe ── */}
+      <rect x="2" y="28" width="76" height="3" fill="#FFD700" />
+      <rect x="2" y="10" width="76" height="1.5" fill="#FFD700" opacity="0.6" />
+
+      {/* ── Open rear (jeepneys load from the back) ── */}
+      <rect x="64" y="11" width="14" height="20" rx="1" fill="#7a2e08" opacity="0.7" />
+      <rect x="65" y="12" width="12" height="10" rx="1" fill="#5a1f04" opacity="0.5" />
+      {/* Taillights */}
+      <rect x="76" y="14" width="2" height="5" rx="1" fill="#EF5350" />
+      <rect x="76" y="22" width="2" height="3" rx="1" fill="#EF9A9A" />
+      {/* Rear chrome bumper */}
+      <rect x="66" y="30" width="12" height="2.5" rx="1" fill="#E0E0E0" />
+
+      {/* ── Front chrome bumper ── */}
+      <rect x="2" y="30" width="16" height="2.5" rx="1" fill="#E0E0E0" />
+
+      {/* ── Wheels ── */}
+      <circle cx="20" cy="38" r="7.5" fill="#1a1a1a" />
+      <circle cx="20" cy="38" r="5"   fill="#2C3E50" />
+      <circle cx="20" cy="38" r="2.5" fill="#95A5A6" />
+      <circle cx="20" cy="38" r="1"   fill="#BDC3C7" />
+
+      <circle cx="56" cy="38" r="7.5" fill="#1a1a1a" />
+      <circle cx="56" cy="38" r="5"   fill="#2C3E50" />
+      <circle cx="56" cy="38" r="2.5" fill="#95A5A6" />
+      <circle cx="56" cy="38" r="1"   fill="#BDC3C7" />
+    </svg>
+  );
+}
+
 // ── Map Home Tab (always shows map) ───────────────────────────────────────────
 
-function MapHomeTab({ driver, mapCenter, polyline, tripActive, totalWaiting, occCount, occHex, route, scoreData, scoreLoading, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
-  const markerIcon = MAPS_API_KEY
-    ? {
-        path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
-        fillColor: "#C2652A",
-        fillOpacity: 1,
-        strokeColor: "#fff",
-        strokeWeight: 2,
-        scale: 1.5,
-        anchor: { x: 12, y: 22 },
-      }
-    : undefined;
+function MapHomeTab({ driver, mapCenter, polyline, tripActive, totalWaiting, stops, occCount, occHex, route, scoreData, scoreLoading, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
+  const mapRef = useRef(null);
+
+  useEffect(() => {
+    if (!mapRef.current || !driver.lat || !driver.lng) return;
+    mapRef.current.panTo({ lat: driver.lat, lng: driver.lng });
+  }, [driver.lat, driver.lng]);
+
+  // Memoize so @react-google-maps/api doesn't call setPath every sim tick
+  const polylinePath = useMemo(
+    () => polyline.map((p) => Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }),
+    [polyline]
+  );
+
+  // Memoize so setOptions only fires when tripActive actually changes
+  const polylineOptions = useMemo(
+    () => ({ strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: tripActive ? 0.9 : 0.5 }),
+    [tripActive]
+  );
+
+  const jeepPixelOffset = useMemo(
+    () => (w, h) => ({ x: -(w / 2), y: -(h - 4) }),
+    []
+  );
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -189,18 +316,32 @@ function MapHomeTab({ driver, mapCenter, polyline, tripActive, totalWaiting, occ
         {MAPS_API_KEY ? (
           <GoogleMap
             mapContainerStyle={{ width: "100%", height: "100%" }}
-            center={mapCenter}
+            center={DEFAULT_CENTER}
             zoom={14}
             options={WARM_MAP_OPTIONS}
+            onLoad={(map) => { mapRef.current = map; }}
           >
             {driver.lat && (
-              <Marker position={{ lat: driver.lat, lng: driver.lng }} icon={markerIcon} />
+              <OverlayView
+                position={{ lat: driver.lat, lng: driver.lng }}
+                mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+                getPixelPositionOffset={jeepPixelOffset}
+              >
+                <JeepneyMarker />
+              </OverlayView>
             )}
-            {polyline.length > 1 && (
-              <Polyline
-                path={polyline.map(([lat, lng]) => ({ lat, lng }))}
-                options={{ strokeColor: "#C2652A", strokeWeight: 4, strokeOpacity: tripActive ? 0.9 : 0.4 }}
-              />
+            {stops.map((stop) => stop.lat && (
+              <OverlayView
+                key={stop.id}
+                position={{ lat: stop.lat, lng: stop.lng }}
+                mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+                getPixelPositionOffset={(w, h) => ({ x: -(w / 2), y: -h })}
+              >
+                <StopMarker name={stop.stop || stop.name} count={stop.count ?? 0} />
+              </OverlayView>
+            ))}
+            {polylinePath.length > 1 && (
+              <Polyline path={polylinePath} options={polylineOptions} />
             )}
           </GoogleMap>
         ) : (

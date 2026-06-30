@@ -29,9 +29,9 @@ def compute(driver_id: str, driver_doc: dict) -> dict:
     waiting_count = len(waiting)
     total_potential = on_board + waiting_count
 
-    # 2. Get travel time to terminal (stub: use last stop of route)
-    # TODO: resolve terminal coordinates from routes collection
-    travel_time_min = 35  # fallback
+    # 2. Get travel time from the cached route doc (seeded by generate_route_polyline)
+    route_doc = firebase_service.get_doc("routes", route) if route else None
+    travel_time_min = int((route_doc or {}).get("travel_time_min", 35))
 
     # 3. Gemini scoring
     try:
