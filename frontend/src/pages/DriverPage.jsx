@@ -389,7 +389,7 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
           >
             {/* Route polyline — always visible, brighter when in transit */}
             {polylinePath.length > 1 && (
-              <Polyline path={polylinePath} options={polylineOptions} />
+              <Polyline key={polylinePath.length} path={polylinePath} options={polylineOptions} />
             )}
 
             {/* Density heatmap — two concentric circles per stop, cool-to-hot gradient */}

@@ -261,13 +261,18 @@ function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
     }
   }, [isActive]);
 
-  const activeDrivers = drivers.filter((d) => d.lat && d.lng);
-  const waitingPassengers = passengers.filter((p) => p.lat && p.lng);
-
-  const routeDoc = routes.find((r) => r.route_id === "R01");
-  const routePolyline = (routeDoc?.polyline ?? []).map((p) =>
-    Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }
+  const activeDrivers = useMemo(() => drivers.filter((d) => d.lat && d.lng), [drivers]);
+  const waitingPassengers = useMemo(
+    () => passengers.filter((p) => typeof p.lat === "number" && typeof p.lng === "number"),
+    [passengers]
   );
+
+  const routePolyline = useMemo(() => {
+    const rd = routes.find((r) => r.route_id === "R01");
+    return (rd?.polyline ?? []).map((p) =>
+      Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }
+    );
+  }, [routes]);
 
   const jeepIcon = (color) => MAPS_API_KEY ? {
     path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
@@ -318,6 +323,7 @@ function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
               {/* Route polyline */}
               {routePolyline.length > 1 && (
                 <Polyline
+                  key={routePolyline.length}
                   path={routePolyline}
                   options={{ strokeColor: "#EF233C", strokeWeight: 4, strokeOpacity: 0.65 }}
                 />
