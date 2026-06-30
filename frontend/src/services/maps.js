@@ -1,15 +1,21 @@
 export const MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 export const LIBRARIES = [];
 
-// Route center: Lumban, Laguna
-export const DEFAULT_CENTER = { lat: 14.2976, lng: 121.475 };
+// Route center: midpoint of Lumban → Sta. Cruz route
+export const DEFAULT_CENTER = { lat: 14.2780, lng: 121.4390 };
 
-// Lumban → Sta. Cruz demo route stops
+// Real Lumban → Sta. Cruz stops (mirrors Firestore — keep in sync with seed_route.py)
 export const ROUTE_STOPS = [
-  { id: "lumban",     name: "Lumban",     lat: 14.2976, lng: 121.4750 },
-  { id: "town-plaza", name: "Town Plaza", lat: 14.2965, lng: 121.4720 },
-  { id: "pagsawitan", name: "Pagsawitan", lat: 14.2875, lng: 121.4445 },
-  { id: "sta-cruz",   name: "Sta. Cruz",  lat: 14.2820, lng: 121.4183 },
+  { id: "R01_Lumban",             name: "Lumban",                      lat: 14.2989101, lng: 121.4637842 },
+  { id: "R01_7Eleven",            name: "7-Eleven Lumban",             lat: 14.2922896, lng: 121.4608792 },
+  { id: "R01_BDO_Pagsanjan",      name: "BDO Pagsanjan",               lat: 14.2729798, lng: 121.4548759 },
+  { id: "R01_Pagsanjan_Terminal", name: "Pagsanjan Terminal",           lat: 14.2649319, lng: 121.4354092 },
+  { id: "R01_DLTB_Pagsawitan",    name: "DLTB Pagsawitan",             lat: 14.2666797, lng: 121.4254287 },
+  { id: "R01_RedCross",           name: "Philippine Red Cross",         lat: 14.2746565, lng: 121.4178734 },
+  { id: "R01_PWU",                name: "Philippine Women's University",lat: 14.2814155, lng: 121.4158682 },
+  { id: "R01_Jollibee",           name: "Jollibee Sta. Cruz",           lat: 14.2830272, lng: 121.4150841 },
+  { id: "R01_FcHome",             name: "FC Home Center",               lat: 14.2849718, lng: 121.4129111 },
+  { id: "R01_StaCruzPlaza",       name: "Sta. Cruz Plaza",              lat: 14.2816764, lng: 121.4149922 },
 ];
 
 // Simplified polyline for simulation (15 waypoints along the route)

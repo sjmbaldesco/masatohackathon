@@ -25,8 +25,8 @@ def get_doc(collection: str, doc_id: str) -> dict | None:
     return doc.to_dict() if doc.exists else None
 
 
-def set_doc(collection: str, doc_id: str, data: dict):
-    db.collection(collection).document(doc_id).set(data, merge=True)
+def set_doc(collection: str, doc_id: str, data: dict, merge: bool = True):
+    db.collection(collection).document(doc_id).set(data, merge=merge)
 
 
 def delete_doc(collection: str, doc_id: str):

@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     app_env: str = "development"
     allowed_origins: str = "http://localhost:3000"
+    demo_key: str = "pasada-demo-2025"
 
     class Config:
         env_file = ".env"
