@@ -132,7 +132,7 @@ export default function DriverLoginPage() {
         </div>
 
         {/* Info box */}
-        <div className="flex gap-3 rounded-2xl bg-pasada-rust/8 border border-pasada-rust/15 p-4" style={{ backgroundColor: "rgba(194,101,42,0.06)" }}>
+        <div className="flex gap-3 rounded-2xl border border-pasada-rust/20 p-4" style={{ backgroundColor: "rgba(239,35,60,0.05)" }}>
           <ShieldCheck size={20} className="text-pasada-rust shrink-0 mt-0.5" />
           <p className="text-sm text-pasada-warm leading-relaxed">
             Driver accounts are created and managed by the Transport Operations Center. Contact your administrator if you need a new Driver ID or PIN.

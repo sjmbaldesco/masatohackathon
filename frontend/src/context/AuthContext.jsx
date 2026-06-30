@@ -109,9 +109,8 @@ export function AuthProvider({ children }) {
     try {
       const syntheticEmail = `${driverId.replace(/[^a-z0-9]/gi, "").toLowerCase()}@pasada.app`;
       const cred = await signInWithEmailAndPassword(auth, syntheticEmail, pin);
-      // Set state immediately so ProtectedRoute doesn't bounce before onAuthStateChanged fires
-      setUser(cred.user);
-      setRole("driver");
+      // Persist role to Firestore so onAuthStateChanged reads "driver" and doesn't reset to null
+      await _persistRole(cred.user, "driver");
     } catch (err) {
       const driverCodes = ["auth/user-not-found", "auth/wrong-password", "auth/invalid-credential"];
       const msg = driverCodes.includes(err.code)

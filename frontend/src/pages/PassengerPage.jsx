@@ -311,7 +311,7 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
         className="absolute bottom-0 inset-x-0 z-10"
         style={{
           background:
-            "linear-gradient(to top, rgba(250,245,238,1) 0%, rgba(250,245,238,0.97) 65%, rgba(250,245,238,0) 100%)",
+            "linear-gradient(to top, rgba(237,242,244,1) 0%, rgba(237,242,244,0.97) 65%, rgba(237,242,244,0) 100%)",
           paddingTop: "60px",
         }}
       >

@@ -401,7 +401,7 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
       <div
         className="absolute bottom-0 inset-x-0 z-10"
         style={{
-          background: "linear-gradient(to top, rgba(250,245,238,1) 0%, rgba(250,245,238,0.97) 55%, rgba(250,245,238,0) 100%)",
+          background: "linear-gradient(to top, rgba(237,242,244,1) 0%, rgba(237,242,244,0.97) 55%, rgba(237,242,244,0) 100%)",
           paddingTop: "80px",
         }}
       >

@@ -8,7 +8,7 @@ const driverIcon = L.divIcon({
   className: "",
   html: `<div style="
     width:48px;height:48px;
-    background:rgba(194,101,42,0.2);
+    background:rgba(239,35,60,0.15);
     border-radius:50%;
     display:flex;align-items:center;justify-content:center;
   ">
@@ -186,13 +186,13 @@ export default function ActiveTripMap({
       {/* Top gradient */}
       <div
         className="pointer-events-none absolute inset-x-0 top-0 z-10 h-40"
-        style={{ background: "linear-gradient(180deg, rgba(250,245,238,0.9) 0%, rgba(250,245,238,0) 100%)" }}
+        style={{ background: "linear-gradient(180deg, rgba(237,242,244,0.9) 0%, rgba(237,242,244,0) 100%)" }}
       />
 
       {/* Bottom gradient */}
       <div
         className="pointer-events-none absolute bottom-0 inset-x-0 z-10 h-64"
-        style={{ background: "linear-gradient(0deg, rgb(250,245,238) 0%, rgba(250,245,238,0) 100%)" }}
+        style={{ background: "linear-gradient(0deg, rgb(237,242,244) 0%, rgba(237,242,244,0) 100%)" }}
       />
 
       {/* Header */}
