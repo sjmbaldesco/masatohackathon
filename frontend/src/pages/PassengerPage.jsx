@@ -31,7 +31,6 @@ export default function PassengerPage() {
   const [activeTab, setActiveTab]     = useState("home");
   const [selectedStop, setSelectedStop] = useState(ROUTE_STOPS[0]);
   const [isWaiting, setIsWaiting]     = useState(false);
-  const [showDetails, setShowDetails] = useState(false);
   const [etaStart, setEtaStart]       = useState(null);
   const [userLocation, setUserLocation] = useState(null);
 
@@ -124,7 +123,6 @@ export default function PassengerPage() {
       console.error(e);
     }
     setIsWaiting(false);
-    setShowDetails(false);
   }
 
   return (
@@ -140,7 +138,6 @@ export default function PassengerPage() {
           onWait={handleWait}
           onCancel={handleCancel}
           onBoarded={() => handleCancel("boarded")}
-          onShowDetails={() => setShowDetails(true)}
           currentEta={currentEta}
           etaProgress={etaProgress}
           userLocation={userLocation}
@@ -161,13 +158,6 @@ export default function PassengerPage() {
 
       <TabBar tabs={TABS} active={activeTab} onChange={setActiveTab} />
 
-      {showDetails && nearestJeep && (
-        <JeepDetailsSheet
-          jeep={nearestJeep}
-          eta={currentEta}
-          onClose={() => setShowDetails(false)}
-        />
-      )}
     </div>
     </div>
   );
@@ -175,7 +165,7 @@ export default function PassengerPage() {
 
 // ── Home Tab ──────────────────────────────────────────────────────────────────
 
-function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onBoarded, onShowDetails, currentEta, etaProgress, userLocation, waitingCounts = {} }) {
+function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onBoarded, currentEta, etaProgress, userLocation, waitingCounts = {} }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen,  setSearchOpen]  = useState(false);
   const [directions,  setDirections]  = useState(null);
@@ -353,25 +343,18 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
         <div className="px-4 space-y-3 pb-4">
           {/* Next jeep card */}
           <div className="rounded-2xl bg-white border border-pasada-border overflow-hidden shadow-sm">
-            {/* ETA header — tap for full jeepney details */}
-            <button
-              type="button"
-              onClick={nearestJeep ? onShowDetails : undefined}
-              className={`flex w-full items-center justify-between px-4 py-2.5 border-b border-pasada-border text-left ${
-                nearestJeep ? "cursor-pointer transition-colors hover:bg-pasada-cream/60" : "cursor-default"
-              }`}
-            >
+            {/* ETA header */}
+            <div className="flex w-full items-center justify-between px-4 py-2.5 border-b border-pasada-border">
               <div className="flex items-center gap-2">
                 <Clock size={14} className="text-pasada-rust" />
                 <span className="text-sm font-bold text-pasada-dark">
                   {currentEta != null ? `${currentEta} min away` : "Locating jeep…"}
                 </span>
               </div>
-              <span className="flex items-center gap-1 text-xs text-pasada-muted">
+              <span className="text-xs text-pasada-muted">
                 {nearestJeep?.plate ?? "ABC 1234"}
-                {nearestJeep && <ChevronRight size={13} />}
               </span>
-            </button>
+            </div>
 
             {/* Route progress — pill track with bus icon */}
             <div className="px-4 pt-3 pb-1">
@@ -782,66 +765,3 @@ function ProfileTab({ user, onLogout }) {
 }
 
 // ── Jeep Details Sheet ────────────────────────────────────────────────────────
-
-function JeepDetailsSheet({ jeep, eta, onClose }) {
-  const occCount = jeep.occupancy_count ?? 0;
-  const isFull   = occCount >= CAPACITY;
-  const seats    = CAPACITY - occCount;
-  const occPct   = Math.round((occCount / CAPACITY) * 100);
-  const dotColor = occupancyColor(occPct);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end" onClick={onClose}>
-      <div
-        className="w-full rounded-t-3xl bg-white p-6 space-y-4 max-h-[70vh] overflow-y-auto shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between">
-          <h2 className="font-garamond text-2xl font-bold text-pasada-dark">Jeepney Details</h2>
-          <button
-            onClick={onClose}
-            className="flex size-8 items-center justify-center rounded-full bg-pasada-cream"
-          >
-            <X size={16} className="text-pasada-warm" />
-          </button>
-        </div>
-
-        {/* Occupancy bar */}
-        <div>
-          <div className="flex justify-between text-sm mb-1.5">
-            <span className="text-pasada-muted text-xs font-semibold uppercase tracking-wide">
-              Occupancy
-            </span>
-            <span className="font-bold text-sm" style={{ color: dotColor }}>
-              {isFull ? "Full" : `${occCount}/${CAPACITY}`}
-            </span>
-          </div>
-          <div className="h-2.5 rounded-full bg-pasada-cream">
-            <div
-              className="h-2.5 rounded-full transition-all"
-              style={{ width: `${occPct}%`, backgroundColor: dotColor }}
-            />
-          </div>
-          <p className="text-xs text-pasada-muted mt-1">{seats} seats available</p>
-        </div>
-
-        {/* Details grid */}
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            { label: "Plate",         value: jeep.plate         ?? "ABC 1234"       },
-            { label: "Driver",        value: jeep.driver_name   ?? "J. Dela Cruz"   },
-            { label: "Speed",         value: `${jeep.speed_kmh ?? 0} km/h`          },
-            { label: "Current Stop",  value: jeep.current_stop  ?? "—"              },
-            { label: "ETA",           value: eta ? `${eta} min`  : "—"              },
-            { label: "Route",         value: "Lumban → Sta. Cruz"                   },
-          ].map(({ label, value }) => (
-            <div key={label} className="rounded-xl bg-pasada-cream p-3">
-              <p className="text-[11px] text-pasada-muted uppercase tracking-wide">{label}</p>
-              <p className="font-bold text-pasada-dark text-sm mt-0.5">{value}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
