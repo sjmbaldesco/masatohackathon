@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "demo": "playwright test --headed"
+    "demo": "playwright test"
   },
   "dependencies": {
     "@react-google-maps/api": "^2.20.8",
