@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { getDoc, doc } from "firebase/firestore";
 import { GoogleMap, Marker, PolylineF, DirectionsRenderer, OverlayView } from "@react-google-maps/api";
 import {
@@ -63,6 +63,19 @@ export default function PassengerPage() {
 
   const { data: drivers } = useCollection("drivers", [["route", "==", ROUTE_ID]]);
   const activeDrivers     = drivers.filter((d) => d.status !== "ended" && d.lat && d.lng);
+
+  // Other passengers currently waiting on this route — read live so everyone
+  // (not just the driver/admin) can see demand at each stop, not just the jeep.
+  const { data: waitingPassengers } = useCollection(
+    "passengers", [["route", "==", ROUTE_ID], ["status", "==", "waiting"]]
+  );
+  const waitingCounts = useMemo(() => {
+    const counts = {};
+    for (const p of waitingPassengers) {
+      if (p.stop) counts[p.stop] = (counts[p.stop] ?? 0) + 1;
+    }
+    return counts;
+  }, [waitingPassengers]);
   // Pick the jeep with the smallest ETA to the selected stop
   const nearestJeep = selectedStop
     ? activeDrivers.reduce((best, d) => {
@@ -129,6 +142,7 @@ export default function PassengerPage() {
           currentEta={currentEta}
           etaProgress={etaProgress}
           userLocation={userLocation}
+          waitingCounts={waitingCounts}
         />
       )}
       {activeTab === "map" && (
@@ -138,6 +152,7 @@ export default function PassengerPage() {
           selectedStop={selectedStop}
           onSelectStop={setSelectedStop}
           userLocation={userLocation}
+          waitingCounts={waitingCounts}
         />
       )}
       {activeTab === "profile" && <ProfileTab user={user} onLogout={logout} />}
@@ -157,7 +172,7 @@ export default function PassengerPage() {
 
 // ── Home Tab ──────────────────────────────────────────────────────────────────
 
-function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onShowDetails, currentEta, etaProgress, userLocation }) {
+function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onShowDetails, currentEta, etaProgress, userLocation, waitingCounts = {} }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen,  setSearchOpen]  = useState(false);
   const [directions,  setDirections]  = useState(null);
@@ -243,19 +258,14 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
               />
             )}
 
-            {/* Stop markers — clickable to set destination */}
+            {/* Stop markers — clickable to set destination; badge shows other
+                passengers currently waiting there */}
             {ROUTE_STOPS.map((stop) => (
-              <Marker
+              <PassengerStopMarker
                 key={stop.id}
-                position={{ lat: stop.lat, lng: stop.lng }}
-                icon={{
-                  path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
-                  fillColor: selectedStop?.id === stop.id ? "#EF233C" : "#8D99AE",
-                  fillOpacity: 1,
-                  strokeColor: "#fff",
-                  strokeWeight: 2,
-                  scale: selectedStop?.id === stop.id ? 1.1 : 0.85,
-                }}
+                stop={stop}
+                isSelected={selectedStop?.id === stop.id}
+                waitingCount={waitingCounts[stop.name] ?? 0}
                 onClick={() => selectStop(stop)}
               />
             ))}
@@ -447,7 +457,7 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
 
 // ── Map Tab ───────────────────────────────────────────────────────────────────
 
-function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLocation }) {
+function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLocation, waitingCounts = {} }) {
   const [tappedStop,      setTappedStop]      = useState(null);
   const [searchQuery,     setSearchQuery]      = useState("");
   const [routeDirections, setRouteDirections]  = useState(null);
@@ -528,21 +538,14 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
             />
           )}
 
-          {/* Clickable stop markers */}
+          {/* Clickable stop markers — badge shows other passengers waiting there */}
           {filteredStops.map((stop) => (
-            <Marker
+            <PassengerStopMarker
               key={stop.id}
-              position={{ lat: stop.lat, lng: stop.lng }}
-              icon={{
-                path: "M -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0",
-                fillColor: selectedStop?.id === stop.id
-                  ? "#EF233C"
-                  : tappedStop?.id === stop.id ? "#2B2D42" : "#8D99AE",
-                fillOpacity: 1,
-                strokeColor: "#fff",
-                strokeWeight: 2,
-                scale: selectedStop?.id === stop.id ? 1.2 : 0.9,
-              }}
+              stop={stop}
+              isSelected={selectedStop?.id === stop.id}
+              isTapped={tappedStop?.id === stop.id}
+              waitingCount={waitingCounts[stop.name] ?? 0}
               onClick={() => {
                 setTappedStop(stop);
                 mapRef.current?.panTo({ lat: stop.lat, lng: stop.lng });
@@ -610,6 +613,53 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
         </div>
       )}
     </div>
+  );
+}
+
+// ── Stop marker with other-passengers-waiting badge ───────────────────────────
+
+function PassengerStopMarker({ stop, isSelected, isTapped = false, waitingCount = 0, onClick }) {
+  const hasWaiting = waitingCount > 0;
+  const dotColor = isSelected ? "#EF233C" : isTapped ? "#2B2D42" : hasWaiting ? "#2563EB" : "#8D99AE";
+  const dotSize = isSelected ? 18 : 14;
+
+  return (
+    <OverlayView
+      position={{ lat: stop.lat, lng: stop.lng }}
+      mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+      getPixelPositionOffset={(w, h) => ({ x: -w / 2, y: -h / 2 })}
+    >
+      <div
+        onClick={onClick}
+        style={{ display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer" }}
+      >
+        {/* Count badge — only shown when other passengers are waiting here */}
+        {hasWaiting && (
+          <div style={{
+            background: "#2563EB",
+            color: "#fff",
+            fontSize: 10,
+            fontWeight: 700,
+            fontFamily: "sans-serif",
+            borderRadius: 99,
+            padding: "1px 6px",
+            marginBottom: 2,
+            whiteSpace: "nowrap",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+          }}>
+            {waitingCount} waiting
+          </div>
+        )}
+        <div style={{
+          width: dotSize,
+          height: dotSize,
+          borderRadius: "50%",
+          background: dotColor,
+          border: "2px solid #fff",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+        }} />
+      </div>
+    </OverlayView>
   );
 }
 
