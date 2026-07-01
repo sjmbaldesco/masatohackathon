@@ -104,9 +104,9 @@ export default function PassengerPage() {
     }
   }
 
-  async function handleCancel() {
+  async function handleCancel(reason = "cancelled") {
     try {
-      await cancelWaiting(user.uid);
+      await cancelWaiting(user.uid, reason);
     } catch (e) {
       console.error(e);
     }
@@ -115,7 +115,8 @@ export default function PassengerPage() {
   }
 
   return (
-    <div className="flex h-screen max-w-[430px] mx-auto flex-col overflow-hidden bg-pasada-cream font-manrope">
+    <div className="min-h-dvh w-full bg-pasada-dark sm:flex sm:items-center sm:justify-center sm:px-4 sm:py-6">
+    <div className="flex h-dvh w-full max-w-[430px] mx-auto flex-col overflow-hidden bg-pasada-cream font-manrope sm:h-[min(860px,calc(100dvh-3rem))] sm:rounded-[2.5rem] sm:border sm:border-pasada-border/60 sm:shadow-2xl">
       {activeTab === "home" && (
         <HomeTab
           nearestJeep={nearestJeep}
@@ -125,6 +126,7 @@ export default function PassengerPage() {
           isWaiting={isWaiting}
           onWait={handleWait}
           onCancel={handleCancel}
+          onBoarded={() => handleCancel("boarded")}
           onShowDetails={() => setShowDetails(true)}
           currentEta={currentEta}
           etaProgress={etaProgress}
@@ -152,12 +154,13 @@ export default function PassengerPage() {
         />
       )}
     </div>
+    </div>
   );
 }
 
 // ── Home Tab ──────────────────────────────────────────────────────────────────
 
-function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onShowDetails, currentEta, etaProgress, userLocation }) {
+function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onBoarded, onShowDetails, currentEta, etaProgress, userLocation }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen,  setSearchOpen]  = useState(false);
   const [directions,  setDirections]  = useState(null);
@@ -340,18 +343,25 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
         <div className="px-4 space-y-3 pb-4">
           {/* Next jeep card */}
           <div className="rounded-2xl bg-white border border-pasada-border overflow-hidden shadow-sm">
-            {/* ETA header */}
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-pasada-border">
+            {/* ETA header — tap for full jeepney details */}
+            <button
+              type="button"
+              onClick={nearestJeep ? onShowDetails : undefined}
+              className={`flex w-full items-center justify-between px-4 py-2.5 border-b border-pasada-border text-left ${
+                nearestJeep ? "cursor-pointer transition-colors hover:bg-pasada-cream/60" : "cursor-default"
+              }`}
+            >
               <div className="flex items-center gap-2">
                 <Clock size={14} className="text-pasada-rust" />
                 <span className="text-sm font-bold text-pasada-dark">
                   {currentEta != null ? `${currentEta} min away` : "Locating jeep…"}
                 </span>
               </div>
-              <span className="text-xs text-pasada-muted">
+              <span className="flex items-center gap-1 text-xs text-pasada-muted">
                 {nearestJeep?.plate ?? "ABC 1234"}
+                {nearestJeep && <ChevronRight size={13} />}
               </span>
-            </div>
+            </button>
 
             {/* Route progress — pill track with bus icon */}
             <div className="px-4 pt-3 pb-1">
@@ -419,25 +429,30 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
 
           {/* Signal toggle button */}
           <button
-            onClick={isWaiting ? onCancel : onWait}
+            onClick={() => (isWaiting ? onCancel() : onWait())}
             className={`w-full rounded-2xl py-4 text-base font-bold shadow-sm transition-colors ${
               isWaiting
                 ? "bg-pasada-rust text-white hover:bg-pasada-rust/90"
                 : "border-2 border-pasada-muted/40 bg-white/70 text-pasada-muted hover:border-pasada-rust hover:text-pasada-rust"
             }`}
           >
-            {isWaiting ? `Waiting at ${selectedStop?.name ?? "…"}` : "Signal"}
+            {isWaiting ? `I'm waiting at ${selectedStop?.name ?? "…"}` : "Signal"}
           </button>
+
           {isWaiting && (
-            <div className="flex items-center justify-between px-1">
-              <p className="text-xs text-pasada-muted">Tap again to cancel · Driver sees your stop</p>
+            <>
+              <p className="text-center text-[11px] text-pasada-muted">
+                Press again to cancel
+              </p>
+
+              {/* Covers: passenger boarded this jeep, or a different one entirely */}
               <button
-                onClick={onShowDetails}
-                className="flex items-center gap-1 text-xs font-bold text-pasada-dark hover:text-pasada-rust transition-colors"
+                onClick={onBoarded}
+                className="w-full rounded-2xl py-3 text-sm font-semibold text-pasada-warm border border-pasada-border bg-white/70 hover:border-pasada-rust hover:text-pasada-rust transition-colors"
               >
-                Details <ChevronRight size={12} />
+                I've boarded a jeepney
               </button>
-            </div>
+            </>
           )}
         </div>
       </div>

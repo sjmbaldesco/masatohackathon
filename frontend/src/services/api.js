@@ -20,8 +20,9 @@ export const broadcastWaiting = (data) =>
   // POST { stop, route, lat, lng }
   api.post("/passengers/waiting", data);
 
-export const cancelWaiting = (passengerId) =>
-  api.delete(`/passengers/${passengerId}/waiting`);
+export const cancelWaiting = (passengerId, reason = "cancelled") =>
+  // reason: "cancelled" (gave up waiting) | "boarded" (already on a jeepney)
+  api.delete(`/passengers/${passengerId}/waiting`, { params: { reason } });
 
 // --- Drivers ---
 export const updateDriverGPS = (data) =>

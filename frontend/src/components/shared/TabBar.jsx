@@ -1,6 +1,9 @@
 export default function TabBar({ tabs, active, onChange }) {
   return (
-    <nav className="flex border-t border-pasada-border bg-white">
+    <nav
+      className="flex border-t border-pasada-border bg-white"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
       {tabs.map(({ id, label, icon: Icon }) => {
         const isActive = active === id;
         return (
