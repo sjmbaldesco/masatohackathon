@@ -80,28 +80,36 @@ export function etaMinutes(jeepPos, stopPos, speedKmh = 30) {
 
 // Projects p onto the closest point on segment a→b (planar approximation —
 // fine at the scale of a single jeepney route, not for cross-country spans).
+// Returns the projected point plus t (0-1 fraction along the segment), so
+// callers can track exactly how far along the polyline that point falls.
 function projectPointOntoSegment(p, a, b) {
   const dx = b.lng - a.lng;
   const dy = b.lat - a.lat;
   const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return { lat: a.lat, lng: a.lng };
+  if (lenSq === 0) return { point: { lat: a.lat, lng: a.lng }, t: 0 };
   let t = ((p.lng - a.lng) * dx + (p.lat - a.lat) * dy) / lenSq;
   t = Math.max(0, Math.min(1, t));
-  return { lat: a.lat + t * dy, lng: a.lng + t * dx };
+  return { point: { lat: a.lat + t * dy, lng: a.lng + t * dx }, t };
 }
 
 /**
- * Snaps a raw GPS/sim point to the nearest point on the route polyline,
- * so the jeep marker tracks the line instead of drifting off it.
+ * Snaps a raw GPS/sim point onto the nearest point on the route polyline,
+ * and also reports WHERE along the polyline that point falls: `index` is the
+ * segment (path[index] -> path[index+1]) and `t` is the 0-1 fraction within
+ * it. `index + t` is a single monotonic-along-the-route progress scalar —
+ * callers can compare it across ticks to detect real forward progress vs.
+ * GPS/sim jitter, and to trim the polyline to only what's still ahead.
  */
-export function projectPointOntoPolyline(point, path) {
-  if (!path || path.length < 2) return point;
+export function projectPointOntoPolylineWithProgress(point, path) {
+  if (!path || path.length < 2) return { point, index: 0, t: 0 };
   let best = point;
   let bestDist = Infinity;
+  let bestIndex = 0;
+  let bestT = 0;
   for (let i = 0; i < path.length - 1; i++) {
-    const proj = projectPointOntoSegment(point, path[i], path[i + 1]);
+    const { point: proj, t } = projectPointOntoSegment(point, path[i], path[i + 1]);
     const d = Math.hypot(proj.lat - point.lat, proj.lng - point.lng);
-    if (d < bestDist) { bestDist = d; best = proj; }
+    if (d < bestDist) { bestDist = d; best = proj; bestIndex = i; bestT = t; }
   }
-  return best;
+  return { point: best, index: bestIndex, t: bestT };
 }

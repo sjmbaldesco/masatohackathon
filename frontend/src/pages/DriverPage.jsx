@@ -14,7 +14,7 @@ import TabBar from "../components/shared/TabBar";
 import DepartureScore from "../components/driver/DepartureScore";
 import OccupancyModal from "../components/driver/OccupancyModal";
 import { startSim, stopSim } from "../services/sim";
-import { DEFAULT_CENTER, DEMO_POLYLINE, MAPS_API_KEY, GRAY_MAP_STYLE, ROUTE_STOPS, occupancyColor, projectPointOntoPolyline } from "../services/maps";
+import { DEFAULT_CENTER, DEMO_POLYLINE, MAPS_API_KEY, GRAY_MAP_STYLE, ROUTE_STOPS, occupancyColor, projectPointOntoPolylineWithProgress } from "../services/maps";
 
 const CAPACITY = 18;
 const ROUTE_ID = "R01";
@@ -214,41 +214,36 @@ export default function DriverPage() {
 
 // ── Animated jeepney marker ───────────────────────────────────────────────────
 // Stable offset — defined at module scope so it never triggers unnecessary re-renders.
-// Anchored EXACTLY at the wheel line (bottom-center), matching the rotating
-// SVG's `transformOrigin: "50% 100%"` below. These two must stay identical —
-// any gap between them (e.g. padding one but not the other) reintroduces drift
-// during turns, since the pivot point and the point pinned to the map diverge.
-const JEEP_PIXEL_OFFSET = (w, h) => ({ x: -(w / 2), y: -h });
+// Anchored at the icon's true visual center, matching the SVG's default
+// `transformOrigin: "50% 50%"` below — rotation pivots around the exact point
+// pinned to the map. Now that the route line itself is trimmed to start right
+// at this same point (see useRouteProgress), a center anchor is what makes the
+// jeep read as tracing the line directly rather than offset above/beside it.
+const JEEP_PIXEL_OFFSET = (w, h) => ({ x: -(w / 2), y: -(h / 2) });
 
 /**
- * Interpolates the jeepney SVG marker at 60fps between 500ms Firestore updates.
- * The raw driver lat/lng is snapped onto the route polyline first (so the icon
- * never drifts off the line), and the icon is rotated to face travel direction.
- * Also drives the map camera via setCenter — but only while isFollowingRef is
- * true, so it never fights a user who's mid-drag.
+ * Interpolates the jeepney SVG marker at 60fps between ticks. Position and
+ * heading both come from `remainingPath` (already snapped onto the route and
+ * progress-clamped upstream — see useRouteProgress) rather than re-projecting
+ * raw coordinates here: remainingPath[0] is the marker's target position, and
+ * remainingPath[1] (the next vertex ahead) is what it faces toward. Also
+ * drives the map camera via panTo — but only while isFollowingRef is true, so
+ * it never fights a user who's mid-drag.
  */
-function AnimatedJeepMarker({ targetLat, targetLng, mapRef, polylinePath, isFollowingRef }) {
-  const [pos, setPos]         = useState(() => projectPointOntoPolyline({ lat: targetLat, lng: targetLng }, polylinePath));
-  const [heading, setHeading] = useState(0);
-  const currentPos    = useRef(pos);
-  const prevProjected = useRef(pos);
-  const headingRef    = useRef(0);
-  const rafRef         = useRef(null);
+function AnimatedJeepMarker({ remainingPath, mapRef, isFollowingRef }) {
+  const to = remainingPath[0];
+  const nextPoint = remainingPath.length > 1 ? remainingPath[1] : null;
+
+  const [pos, setPos]         = useState(to);
+  const [heading, setHeading] = useState(() => (nextPoint ? bearing(to, nextPoint) : 0));
+  const currentPos = useRef(to);
+  const rafRef      = useRef(null);
 
   useEffect(() => {
-    if (targetLat == null || targetLng == null) return;
-
-    const to = projectPointOntoPolyline({ lat: targetLat, lng: targetLng }, polylinePath);
+    if (!to) return;
     const from = { ...currentPos.current };
 
-    // Only recompute heading when the projected point actually moved —
-    // avoids the marker snapping to a stale/jittery bearing while idle.
-    const moved = Math.hypot(to.lat - prevProjected.current.lat, to.lng - prevProjected.current.lng) > 1e-7;
-    if (moved) {
-      headingRef.current = bearing(prevProjected.current, to);
-      setHeading(headingRef.current);
-    }
-    prevProjected.current = to;
+    if (nextPoint) setHeading(bearing(to, nextPoint));
 
     // Camera follow: pan once per tick via the map's own animated panTo, not
     // every rAF frame. Calling setCenter 60x/sec was fighting the browser's
@@ -269,13 +264,13 @@ function AnimatedJeepMarker({ targetLat, targetLng, mapRef, polylinePath, isFoll
         lng: from.lng + (to.lng - from.lng) * ease,
       };
       currentPos.current = next;
-      setPos({ ...next });
+      setPos(next);
       if (t < 1) rafRef.current = requestAnimationFrame(step);
     }
 
     rafRef.current = requestAnimationFrame(step);
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, [targetLat, targetLng, polylinePath]);
+  }, [to, nextPoint]);
 
   return (
     <OverlayView
@@ -332,21 +327,12 @@ function JeepneyMarker({ heading = 0 }) {
   // (heading + 90) so a 0° (north) heading turns it to face up, 90° (east) right, etc.
   const rotateDeg = (heading + 90) % 360;
   return (
-    // Fixed-size, non-rotating wrapper — this is what OverlayView measures for
-    // JEEP_PIXEL_OFFSET, so its box must stay exactly 30×18 regardless of what
-    // rotates or overflows inside it. zIndex forces the vehicle above the route
-    // polyline even if pane order alone were ever ambiguous across browsers.
-    <div style={{ position: "relative", width: 30, height: 18, zIndex: 10 }}>
-      {/* Static contact shadow — deliberately does NOT rotate with the body,
-          so it always reads as a shadow cast straight down onto the road,
-          not a shadow that spins with the vehicle. */}
-      <div style={{
-        position: "absolute", left: "50%", bottom: -1,
-        transform: "translateX(-50%)",
-        width: 20, height: 5, borderRadius: "50%",
-        background: "radial-gradient(ellipse, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0) 72%)",
-      }} />
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 48" width="30" height="18" style={{ position: "absolute", left: 0, bottom: 0, display: "block", filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.3))", transform: `rotate(${rotateDeg}deg)`, transformOrigin: "50% 100%", transition: "transform 300ms ease" }}>
+    // position:relative is only here so zIndex takes effect (it's a no-op on
+    // static-positioned elements) — this keeps the vehicle above the trimmed
+    // route polyline where their leading edges meet. Rotation pivots around
+    // the SVG's own center (default transformOrigin), matching JEEP_PIXEL_OFFSET
+    // below, which anchors that same center point exactly on the line.
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 48" width="30" height="18" style={{ position: "relative", zIndex: 10, display: "block", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.35))", transform: `rotate(${rotateDeg}deg)`, transformOrigin: "50% 50%", transition: "transform 300ms ease" }}>
       {/* ── Ground shadow ── */}
       <ellipse cx="40" cy="46" rx="32" ry="3" fill="rgba(0,0,0,0.18)" />
 
@@ -416,9 +402,55 @@ function JeepneyMarker({ heading = 0 }) {
       <circle cx="56" cy="38" r="5"   fill="#2C3E50" />
       <circle cx="56" cy="38" r="2.5" fill="#95A5A6" />
       <circle cx="56" cy="38" r="1"   fill="#BDC3C7" />
-      </svg>
-    </div>
+    </svg>
   );
+}
+
+// ── Route progress tracking ────────────────────────────────────────────────────
+
+/**
+ * Tracks how far along the route polyline the driver has progressed, and
+ * derives the trimmed "remaining" path — from the current position onward —
+ * so the line behind the jeep can be hidden instead of drawing the whole
+ * route start-to-finish for the entire trip.
+ *
+ * Progress (segment index + fraction within it) only ever moves forward:
+ * GPS/sim jitter that projects the raw position slightly backward between
+ * ticks is ignored rather than trimming the line back, which would otherwise
+ * flicker/re-extend it. Resets when a new trip starts (tripActive flips
+ * false -> true) so a fresh trip doesn't inherit the previous trip's progress.
+ */
+function useRouteProgress(rawLat, rawLng, polylinePath, tripActive) {
+  const furthestRef = useRef({ progress: -1, index: 0, point: null });
+  const [result, setResult] = useState(() => ({
+    leadPoint: null,
+    remainingPath: polylinePath,
+    segmentIndex: 0,
+  }));
+
+  useEffect(() => {
+    furthestRef.current = { progress: -1, index: 0, point: null };
+  }, [tripActive]);
+
+  useEffect(() => {
+    if (rawLat == null || rawLng == null || !polylinePath || polylinePath.length < 2) return;
+
+    const { point, index, t } = projectPointOntoPolylineWithProgress({ lat: rawLat, lng: rawLng }, polylinePath);
+    const progress = index + t;
+
+    if (progress >= furthestRef.current.progress) {
+      furthestRef.current = { progress, index, point };
+    }
+
+    const { index: idx, point: leadPoint } = furthestRef.current;
+    setResult({
+      leadPoint,
+      remainingPath: [leadPoint, ...polylinePath.slice(idx + 1)],
+      segmentIndex: idx,
+    });
+  }, [rawLat, rawLng, polylinePath]);
+
+  return result;
 }
 
 // ── Map Home Tab (always shows map) ───────────────────────────────────────────
@@ -444,6 +476,12 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
   const polylinePath = useMemo(
     () => polyline.map((p) => Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }),
     [polyline]
+  );
+
+  // remainingPath is the route trimmed to what's still ahead of the jeep —
+  // the traveled portion behind it is never drawn.
+  const { leadPoint, remainingPath, segmentIndex } = useRouteProgress(
+    driver.lat, driver.lng, polylinePath, tripActive
   );
 
   const polylineOptions = useMemo(
@@ -494,21 +532,23 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
             options={MAP_OPTIONS}
             onLoad={handleMapLoad}
           >
-            {/* Route polyline — always visible, brighter when in transit */}
-            {polylinePath.length > 1 && (
-              <PolylineF key={polylinePath.length} path={polylinePath} options={polylineOptions} />
+            {/* Route polyline — trimmed to the path still ahead of the jeep;
+                the traveled portion behind it is not drawn. Keyed on
+                segmentIndex (not path length) so it only remounts when the
+                jeep actually crosses into a new segment, not on every tick. */}
+            {remainingPath.length > 1 && (
+              <PolylineF key={segmentIndex} path={remainingPath} options={polylineOptions} />
             )}
 
             {/* Density heatmap — one fixed-size circle per stop, color-coded by tier */}
             {demandCircles}
 
-            {/* Jeepney marker — smoothly interpolated at 60fps, snapped to the route line */}
-            {driver.lat && (
+            {/* Jeepney marker — smoothly interpolated at 60fps, centered exactly
+                on the leading edge of remainingPath (see useRouteProgress) */}
+            {leadPoint && (
               <AnimatedJeepMarker
-                targetLat={driver.lat}
-                targetLng={driver.lng}
+                remainingPath={remainingPath}
                 mapRef={mapRef}
-                polylinePath={polylinePath}
                 isFollowingRef={isFollowingRef}
               />
             )}
