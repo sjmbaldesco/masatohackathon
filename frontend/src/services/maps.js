@@ -77,3 +77,31 @@ export function etaMinutes(jeepPos, stopPos, speedKmh = 30) {
   const dist = haversineKm(jeepPos, stopPos);
   return Math.max(1, Math.round((dist / speedKmh) * 60));
 }
+
+// Projects p onto the closest point on segment a→b (planar approximation —
+// fine at the scale of a single jeepney route, not for cross-country spans).
+function projectPointOntoSegment(p, a, b) {
+  const dx = b.lng - a.lng;
+  const dy = b.lat - a.lat;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return { lat: a.lat, lng: a.lng };
+  let t = ((p.lng - a.lng) * dx + (p.lat - a.lat) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return { lat: a.lat + t * dy, lng: a.lng + t * dx };
+}
+
+/**
+ * Snaps a raw GPS/sim point to the nearest point on the route polyline,
+ * so the jeep marker tracks the line instead of drifting off it.
+ */
+export function projectPointOntoPolyline(point, path) {
+  if (!path || path.length < 2) return point;
+  let best = point;
+  let bestDist = Infinity;
+  for (let i = 0; i < path.length - 1; i++) {
+    const proj = projectPointOntoSegment(point, path[i], path[i + 1]);
+    const d = Math.hypot(proj.lat - point.lat, proj.lng - point.lng);
+    if (d < bestDist) { bestDist = d; best = proj; }
+  }
+  return best;
+}

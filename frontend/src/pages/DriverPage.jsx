@@ -14,7 +14,7 @@ import TabBar from "../components/shared/TabBar";
 import DepartureScore from "../components/driver/DepartureScore";
 import OccupancyModal from "../components/driver/OccupancyModal";
 import { startSim, stopSim } from "../services/sim";
-import { DEFAULT_CENTER, DEMO_POLYLINE, MAPS_API_KEY, GRAY_MAP_STYLE, ROUTE_STOPS, occupancyColor } from "../services/maps";
+import { DEFAULT_CENTER, DEMO_POLYLINE, MAPS_API_KEY, GRAY_MAP_STYLE, ROUTE_STOPS, occupancyColor, projectPointOntoPolyline } from "../services/maps";
 
 const CAPACITY = 18;
 const ROUTE_ID = "R01";
@@ -31,6 +31,24 @@ const MAP_OPTIONS = {
   rotateControl: false,
   styles: GRAY_MAP_STYLE,
 };
+
+// Stable object reference — recreating this on every render was making
+// GoogleMap's center-sync effect re-fire and fight the imperative follow pan.
+const INITIAL_CENTER = { lat: ROUTE_STOPS[0].lat, lng: ROUTE_STOPS[0].lng };
+
+// Demand heatmap tiers — discrete, brand-aligned colors so it reads at a glance.
+// Radius/opacity are fixed per tier on purpose: color alone should carry the signal.
+const DEMAND_TIERS = [
+  { max: 3,        color: "#388E3C", label: "Low (1–3)"    },
+  { max: 7,        color: "#F57C00", label: "Medium (4–7)" },
+  { max: Infinity, color: "#D32F2F", label: "High (8+)"    },
+];
+const DEMAND_CIRCLE_RADIUS_M = 120;
+const DEMAND_CIRCLE_OPACITY  = 0.32;
+
+function demandTier(cnt) {
+  return DEMAND_TIERS.find((t) => cnt <= t.max) ?? DEMAND_TIERS[DEMAND_TIERS.length - 1];
+}
 
 // Compute compass heading from point p1 to p2
 function bearing(p1, p2) {
@@ -81,6 +99,14 @@ export default function DriverPage() {
     driver.lat && driver.lng
       ? { lat: driver.lat, lng: driver.lng }
       : DEFAULT_CENTER;
+
+  // The map div is display:none (not unmounted) while on another tab, which can
+  // leave Google Maps' internal size stale — nudge it to re-measure on return.
+  useEffect(() => {
+    if (activeTab === "home" && mapRef.current && window.google?.maps) {
+      window.google.maps.event.trigger(mapRef.current, "resize");
+    }
+  }, [activeTab]);
 
   const occCount = driver.occupancy_count ?? 0;
   const occPct   = Math.round((occCount / CAPACITY) * 100);
@@ -143,7 +169,11 @@ export default function DriverPage() {
 
   return (
     <div className="flex h-screen max-w-[430px] mx-auto flex-col overflow-hidden bg-pasada-cream font-manrope">
-      {activeTab === "home" && (
+      {/* Stays mounted across tab switches (display:none, not unmounted) —
+          destroying/recreating the GoogleMap + jeep marker every time you left
+          Home was resetting the camera and racing the map's async re-init,
+          which is how the jeep marker was ending up missing on return. */}
+      <div className={activeTab === "home" ? "flex flex-1 flex-col overflow-hidden" : "hidden"}>
         <MapHomeTab
           driver={driver}
           mapCenter={mapCenter}
@@ -163,7 +193,7 @@ export default function DriverPage() {
           onEndTrip={handleEndTrip}
           onOpenModal={() => setShowModal(true)}
         />
-      )}
+      </div>
       {activeTab === "trips"    && <TripsTab />}
       {activeTab === "earnings" && <EarningsTab />}
       {activeTab === "more"     && <MoreTab driver={driver} onLogout={logout} />}
@@ -183,23 +213,49 @@ export default function DriverPage() {
 }
 
 // ── Animated jeepney marker ───────────────────────────────────────────────────
-// Stable offset — defined at module scope so it never triggers unnecessary re-renders
-const JEEP_PIXEL_OFFSET = (w, h) => ({ x: -(w / 2), y: -(h - 4) });
+// Stable offset — defined at module scope so it never triggers unnecessary re-renders.
+// Anchored EXACTLY at the wheel line (bottom-center), matching the rotating
+// SVG's `transformOrigin: "50% 100%"` below. These two must stay identical —
+// any gap between them (e.g. padding one but not the other) reintroduces drift
+// during turns, since the pivot point and the point pinned to the map diverge.
+const JEEP_PIXEL_OFFSET = (w, h) => ({ x: -(w / 2), y: -h });
 
 /**
  * Interpolates the jeepney SVG marker at 60fps between 500ms Firestore updates.
- * Also drives the map camera via setCenter so the view follows the marker smoothly.
+ * The raw driver lat/lng is snapped onto the route polyline first (so the icon
+ * never drifts off the line), and the icon is rotated to face travel direction.
+ * Also drives the map camera via setCenter — but only while isFollowingRef is
+ * true, so it never fights a user who's mid-drag.
  */
-function AnimatedJeepMarker({ targetLat, targetLng, mapRef }) {
-  const [pos, setPos] = useState({ lat: targetLat, lng: targetLng });
-  const currentPos = useRef({ lat: targetLat, lng: targetLng });
-  const rafRef     = useRef(null);
+function AnimatedJeepMarker({ targetLat, targetLng, mapRef, polylinePath, isFollowingRef }) {
+  const [pos, setPos]         = useState(() => projectPointOntoPolyline({ lat: targetLat, lng: targetLng }, polylinePath));
+  const [heading, setHeading] = useState(0);
+  const currentPos    = useRef(pos);
+  const prevProjected = useRef(pos);
+  const headingRef    = useRef(0);
+  const rafRef         = useRef(null);
 
   useEffect(() => {
     if (targetLat == null || targetLng == null) return;
 
-    const from     = { ...currentPos.current };
-    const to       = { lat: targetLat, lng: targetLng };
+    const to = projectPointOntoPolyline({ lat: targetLat, lng: targetLng }, polylinePath);
+    const from = { ...currentPos.current };
+
+    // Only recompute heading when the projected point actually moved —
+    // avoids the marker snapping to a stale/jittery bearing while idle.
+    const moved = Math.hypot(to.lat - prevProjected.current.lat, to.lng - prevProjected.current.lng) > 1e-7;
+    if (moved) {
+      headingRef.current = bearing(prevProjected.current, to);
+      setHeading(headingRef.current);
+    }
+    prevProjected.current = to;
+
+    // Camera follow: pan once per tick via the map's own animated panTo, not
+    // every rAF frame. Calling setCenter 60x/sec was fighting the browser's
+    // own zoom/scroll-wheel handling, which is what made zooming feel jittery.
+    // The marker itself still tweens smoothly below, independent of this.
+    if (isFollowingRef.current && mapRef.current) mapRef.current.panTo(to);
+
     const t0       = performance.now();
     const DURATION = 460; // slightly under the 500ms sim tick
 
@@ -214,13 +270,12 @@ function AnimatedJeepMarker({ targetLat, targetLng, mapRef }) {
       };
       currentPos.current = next;
       setPos({ ...next });
-      if (mapRef.current) mapRef.current.setCenter(next);
       if (t < 1) rafRef.current = requestAnimationFrame(step);
     }
 
     rafRef.current = requestAnimationFrame(step);
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, [targetLat, targetLng]);
+  }, [targetLat, targetLng, polylinePath]);
 
   return (
     <OverlayView
@@ -228,7 +283,7 @@ function AnimatedJeepMarker({ targetLat, targetLng, mapRef }) {
       mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
       getPixelPositionOffset={JEEP_PIXEL_OFFSET}
     >
-      <JeepneyMarker />
+      <JeepneyMarker heading={heading} />
     </OverlayView>
   );
 }
@@ -271,9 +326,27 @@ function StopMarker({ name, count }) {
 
 // ── Philippine Jeepney SVG marker (fixed screen size, zoom-independent) ──────
 
-function JeepneyMarker() {
+function JeepneyMarker({ heading = 0 }) {
+  // The SVG is drawn nose-left (grill/headlights at x=2-18, taillights at x=64-78),
+  // i.e. its resting orientation already points west (compass 270°). Rotate by
+  // (heading + 90) so a 0° (north) heading turns it to face up, 90° (east) right, etc.
+  const rotateDeg = (heading + 90) % 360;
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 48" width="40" height="24" style={{ display: "block", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.35))" }}>
+    // Fixed-size, non-rotating wrapper — this is what OverlayView measures for
+    // JEEP_PIXEL_OFFSET, so its box must stay exactly 30×18 regardless of what
+    // rotates or overflows inside it. zIndex forces the vehicle above the route
+    // polyline even if pane order alone were ever ambiguous across browsers.
+    <div style={{ position: "relative", width: 30, height: 18, zIndex: 10 }}>
+      {/* Static contact shadow — deliberately does NOT rotate with the body,
+          so it always reads as a shadow cast straight down onto the road,
+          not a shadow that spins with the vehicle. */}
+      <div style={{
+        position: "absolute", left: "50%", bottom: -1,
+        transform: "translateX(-50%)",
+        width: 20, height: 5, borderRadius: "50%",
+        background: "radial-gradient(ellipse, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0) 72%)",
+      }} />
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 48" width="30" height="18" style={{ position: "absolute", left: 0, bottom: 0, display: "block", filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.3))", transform: `rotate(${rotateDeg}deg)`, transformOrigin: "50% 100%", transition: "transform 300ms ease" }}>
       {/* ── Ground shadow ── */}
       <ellipse cx="40" cy="46" rx="32" ry="3" fill="rgba(0,0,0,0.18)" />
 
@@ -343,17 +416,30 @@ function JeepneyMarker() {
       <circle cx="56" cy="38" r="5"   fill="#2C3E50" />
       <circle cx="56" cy="38" r="2.5" fill="#95A5A6" />
       <circle cx="56" cy="38" r="1"   fill="#BDC3C7" />
-    </svg>
+      </svg>
+    </div>
   );
 }
 
 // ── Map Home Tab (always shows map) ───────────────────────────────────────────
 
 function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWaiting, stops, occCount, occHex, route, scoreData, scoreLoading, scoreUnavailable, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
-  // Auto-fetch departure score once when idle
+  const [isFollowing, setIsFollowing] = useState(true);
+  const isFollowingRef = useRef(true);
+  useEffect(() => { isFollowingRef.current = isFollowing; }, [isFollowing]);
+
+  // Auto-follow resumes whenever a new trip starts.
+  useEffect(() => {
+    if (tripActive) setIsFollowing(true);
+  }, [tripActive]);
+
+  // Auto-fetch departure score on mount and whenever a trip ends. Depends on
+  // tripActive (not []) because MapHomeTab now stays mounted across tab
+  // switches — it used to remount every time you came back to Home, which is
+  // what refreshed this; without the dependency it would only ever fire once.
   useEffect(() => {
     if (!tripActive) onFetchScore();
-  }, []);
+  }, [tripActive]);
 
   const polylinePath = useMemo(
     () => polyline.map((p) => Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }),
@@ -361,19 +447,40 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
   );
 
   const polylineOptions = useMemo(
-    () => ({ strokeColor: "#EF233C", strokeWeight: 5, strokeOpacity: tripActive ? 1 : 0.4 }),
+    () => ({ strokeColor: "#EF233C", strokeWeight: 5, strokeOpacity: tripActive ? 1 : 0.4, zIndex: 1 }),
     [tripActive]
   );
 
-  // Demand color: sparse = blue → moderate = teal → busy = orange → hot = red
-  function demandColor(cnt) {
-    if (cnt <= 2) return "#2563EB";
-    if (cnt <= 4) return "#0D9488";
-    if (cnt <= 7) return "#F97316";
-    return "#D90429";
+  // Memoized on `stops` alone so a driver-position tick (every 500ms) never
+  // forces the heatmap circles to be rebuilt — only real demand changes do.
+  const demandCircles = useMemo(
+    () =>
+      stops
+        .filter((s) => s.lat && s.lng && (s.count ?? 0) > 0)
+        .map((s) => {
+          const tier = demandTier(s.count);
+          return (
+            <CircleF
+              key={s.id}
+              center={{ lat: s.lat, lng: s.lng }}
+              radius={DEMAND_CIRCLE_RADIUS_M}
+              options={{ strokeWeight: 0, fillColor: tier.color, fillOpacity: DEMAND_CIRCLE_OPACITY }}
+            />
+          );
+        }),
+    [stops]
+  );
+
+  function handleMapLoad(map) {
+    mapRef.current = map;
+    // Native event — fires only on user-initiated drag, never on programmatic panTo/setCenter.
+    map.addListener("dragstart", () => setIsFollowing(false));
   }
 
-  const lumban = ROUTE_STOPS[0];
+  function handleRecenter() {
+    setIsFollowing(true);
+    if (driver.lat && driver.lng) mapRef.current?.panTo({ lat: driver.lat, lng: driver.lng });
+  }
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -382,36 +489,27 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
         {MAPS_API_KEY ? (
           <GoogleMap
             mapContainerStyle={{ width: "100%", height: "100%" }}
-            center={{ lat: lumban.lat, lng: lumban.lng }}
+            center={INITIAL_CENTER}
             zoom={14}
             options={MAP_OPTIONS}
-            onLoad={(map) => { mapRef.current = map; }}
+            onLoad={handleMapLoad}
           >
             {/* Route polyline — always visible, brighter when in transit */}
             {polylinePath.length > 1 && (
               <PolylineF key={polylinePath.length} path={polylinePath} options={polylineOptions} />
             )}
 
-            {/* Density heatmap — two concentric circles per stop, cool-to-hot gradient */}
-            {stops.filter((s) => s.lat && s.lng && (s.count ?? 0) > 0).flatMap((s) => {
-              const cnt = s.count;
-              const color = demandColor(cnt);
-              return [
-                <CircleF key={`${s.id}-o`} center={{ lat: s.lat, lng: s.lng }}
-                  radius={100 + cnt * 20}
-                  options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.11 }} />,
-                <CircleF key={`${s.id}-i`} center={{ lat: s.lat, lng: s.lng }}
-                  radius={45 + cnt * 8}
-                  options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.30 }} />,
-              ];
-            })}
+            {/* Density heatmap — one fixed-size circle per stop, color-coded by tier */}
+            {demandCircles}
 
-            {/* Jeepney marker — smoothly interpolated at 60fps */}
+            {/* Jeepney marker — smoothly interpolated at 60fps, snapped to the route line */}
             {driver.lat && (
               <AnimatedJeepMarker
                 targetLat={driver.lat}
                 targetLng={driver.lng}
                 mapRef={mapRef}
+                polylinePath={polylinePath}
+                isFollowingRef={isFollowingRef}
               />
             )}
           </GoogleMap>
@@ -424,14 +522,30 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
         )}
       </div>
 
-      {/* Recenter on jeep */}
-      {driver.lat && (
+      {/* Recenter — appears only once the driver has dragged away from auto-follow.
+          Sits level with the Route label, in the overlay's transparent gradient
+          zone (above the opaque stat/action cards), so it's never buried under
+          the bottom panel's content regardless of which optional cards (demand
+          chip, confidence card) are currently showing. */}
+      {driver.lat && !isFollowing && (
         <button
-          onClick={() => mapRef.current?.panTo({ lat: driver.lat, lng: driver.lng })}
-          className="absolute bottom-36 right-4 z-10 flex size-12 items-center justify-center rounded-full bg-white shadow-lg border border-pasada-border hover:shadow-xl transition-shadow"
+          onClick={handleRecenter}
+          className="absolute bottom-44 right-4 z-30 flex size-12 items-center justify-center rounded-full bg-pasada-rust shadow-lg hover:shadow-xl transition-shadow"
         >
-          <LocateFixed size={20} className="text-pasada-dark" />
+          <LocateFixed size={20} className="text-pasada-cream" />
         </button>
+      )}
+
+      {/* Demand legend — self-explanatory tier key, shown whenever any stop has waiting passengers */}
+      {totalWaiting > 0 && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-full bg-white/90 shadow-md border border-pasada-border px-3 py-1.5">
+          {DEMAND_TIERS.map((t) => (
+            <span key={t.label} className="flex items-center gap-1 text-[9px] font-semibold text-pasada-dark whitespace-nowrap">
+              <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: t.color }} />
+              {t.label}
+            </span>
+          ))}
+        </div>
       )}
 
       {/* Status badge */}
