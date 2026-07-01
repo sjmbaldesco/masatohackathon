@@ -1,5 +1,4 @@
 from pydantic import BaseModel
-from typing import Literal
 
 
 class GPSUpdateRequest(BaseModel):
@@ -23,4 +22,8 @@ class DepartureScoreResponse(BaseModel):
     expected_passengers: str   # e.g. "17–18"
     travel_time_min: int
     expected_revenue: float
-    recommendation: Literal["Depart Now", "Wait", "Uncertain"]
+    # Free text, not a fixed enum: this is populated either from Gemini's own
+    # generated phrasing (no guarantee it matches a fixed set of strings) or
+    # a hardcoded fallback ("Wait a bit longer") that never matched a strict
+    # Literal — either source reliably 500'd response validation before.
+    recommendation: str
