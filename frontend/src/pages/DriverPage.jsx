@@ -13,6 +13,7 @@ import { db } from "../services/firebase";
 import TabBar from "../components/shared/TabBar";
 import DepartureScore from "../components/driver/DepartureScore";
 import OccupancyModal from "../components/driver/OccupancyModal";
+import EndTripModal from "../components/driver/EndTripModal";
 import { startSim, stopSim } from "../services/sim";
 import {
   DEFAULT_CENTER, DEMO_POLYLINE, MAPS_API_KEY, GRAY_MAP_STYLE, ROUTE_STOPS, occupancyColor,
@@ -46,6 +47,7 @@ export default function DriverPage() {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState("home");
   const [showModal, setShowModal] = useState(false);
+  const [showEndSummary, setShowEndSummary] = useState(false);
   const [scoreData, setScoreData] = useState(null);
   const [scoreLoading, setScoreLoading] = useState(false);
   const [scoreUnavailable, setScoreUnavailable] = useState(false);
@@ -95,8 +97,8 @@ export default function DriverPage() {
   const occPct   = Math.round((occCount / CAPACITY) * 100);
   const occHex   = occupancyColor(occPct);
 
-  async function handleStartTrip() {
-    await setDoc(
+  function handleStartTrip() {
+    setDoc(
       doc(db, "drivers", user.uid),
       {
         status: "in_transit",
@@ -106,7 +108,7 @@ export default function DriverPage() {
         last_updated: serverTimestamp(),
       },
       { merge: true }
-    );
+    ).catch(console.error);
     // Orient map toward the start of the route
     if (mapRef.current && polyline.length >= 2) {
       const h = bearing(polyline[0], polyline[1]);
@@ -117,23 +119,29 @@ export default function DriverPage() {
     startSim(user.uid, polyline, 50);
   }
 
-  async function handleEndTrip() {
+  function handleEndTrip() {
     stopSim(user.uid);
-    await setDoc(
+    setShowEndSummary(true);
+    setDoc(
       doc(db, "drivers", user.uid),
       { status: "idle", speed_kmh: 0, last_updated: serverTimestamp() },
       { merge: true }
-    );
+    ).catch(console.error);
   }
 
-  async function handleSaveOccupancy(count) {
-    const pct = Math.round((count / CAPACITY) * 100);
-    await setDoc(
+  function handleSaveOccupancy(count) {
+    const quickLevels = [
+      { pct: 0 }, { pct: 0.25 }, { pct: 0.5 }, { pct: 0.75 }
+    ];
+    const exactQuickLevel = quickLevels.find(q => Math.round(CAPACITY * q.pct) === count);
+    const pct = exactQuickLevel ? Math.round(exactQuickLevel.pct * 100) : Math.round((count / CAPACITY) * 100);
+
+    setShowModal(false);
+    setDoc(
       doc(db, "drivers", user.uid),
       { occupancy_count: count, occupancy_pct: pct, last_updated: serverTimestamp() },
       { merge: true }
-    );
-    setShowModal(false);
+    ).catch(console.error);
   }
 
   async function fetchScore() {
@@ -189,6 +197,15 @@ export default function DriverPage() {
           currentCount={occCount}
           onSave={handleSaveOccupancy}
           onClose={() => setShowModal(false)}
+        />
+      )}
+
+      {showEndSummary && (
+        <EndTripModal
+          earnings="1,450"
+          passengers="42"
+          tip="High demand at terminal. Proceed to bay 3."
+          onClose={() => setShowEndSummary(false)}
         />
       )}
     </div>
@@ -563,6 +580,7 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
         {/* Action buttons */}
         <div className="flex gap-3 px-4 pb-6">
           <button
+            data-testid="update-occupancy-btn"
             onClick={onOpenModal}
             className="flex-1 rounded-xl border-2 border-pasada-border bg-white py-3.5 text-sm font-bold text-pasada-dark hover:bg-pasada-cream transition-colors"
           >
@@ -570,6 +588,7 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
           </button>
           {tripActive ? (
             <button
+              data-testid="end-trip-btn"
               onClick={onEndTrip}
               className="flex-1 rounded-xl bg-red-600 py-3.5 text-sm font-bold text-white hover:bg-red-700 transition-colors"
             >
@@ -577,6 +596,7 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
             </button>
           ) : (
             <button
+              data-testid="start-trip-btn"
               onClick={onStartTrip}
               disabled={polyline.length < 2}
               className="flex-1 rounded-xl bg-pasada-rust py-3.5 text-sm font-bold text-white hover:bg-pasada-rust/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

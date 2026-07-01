@@ -9,6 +9,7 @@ export default function TabBar({ tabs, active, onChange }) {
         return (
           <button
             key={id}
+            data-testid={`tab-${id}`}
             onClick={() => onChange(id)}
             className={`flex flex-1 flex-col items-center gap-1 py-3 text-[10px] font-semibold transition-colors
               ${isActive ? "text-pasada-rust" : "text-pasada-muted"}`}

@@ -77,6 +77,7 @@ export default function PassengerAdminLogin() {
               Email or Phone Number
             </label>
             <input
+              data-testid="login-email"
               type="text"
               value={email}
               onChange={(e) => { setEmail(e.target.value); setAuthError(null); }}
@@ -96,6 +97,7 @@ export default function PassengerAdminLogin() {
             </div>
             <div className="relative">
               <input
+                data-testid="login-password"
                 type={showPass ? "text" : "password"}
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); setAuthError(null); }}
@@ -126,6 +128,7 @@ export default function PassengerAdminLogin() {
 
           {/* Sign In */}
           <button
+            data-testid="login-submit"
             type="submit"
             disabled={loading}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-pasada-rust py-3.5 text-sm font-bold text-white hover:bg-pasada-rust/90 disabled:opacity-60 transition-colors"
@@ -149,6 +152,7 @@ export default function PassengerAdminLogin() {
 
         {/* Google */}
         <button
+          data-testid="login-google"
           onClick={handleGoogle}
           disabled={googleBusy}
           className="flex w-full items-center justify-center gap-3 rounded-xl border border-pasada-border bg-white py-3 text-sm font-semibold text-pasada-dark hover:bg-pasada-cream/60 disabled:opacity-60 transition-colors shadow-sm"

@@ -69,6 +69,7 @@ export default function RoleSelect() {
           {ROLES.map(({ id, label, icon: Icon, description, color, loginPath }) => (
             <button
               key={id}
+              data-testid={`role-${id}`}
               onClick={() => navigate(loginPath)}
               className="flex w-full items-center gap-4 rounded-2xl bg-white shadow-sm border border-pasada-border px-4 py-4 text-left hover:shadow-md active:scale-[0.99] transition-all"
             >

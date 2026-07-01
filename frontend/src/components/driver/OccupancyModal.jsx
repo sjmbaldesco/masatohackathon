@@ -29,7 +29,9 @@ export default function OccupancyModal({ capacity = 18, currentCount = 0, onSave
     setCount(Math.round(capacity * pct));
   }
 
-  const pct   = Math.round((count / capacity) * 100);
+  const exactQuickLevel = QUICK_LEVELS.find(q => Math.round(capacity * q.pct) === count);
+  const pct = exactQuickLevel ? Math.round(exactQuickLevel.pct * 100) : Math.round((count / capacity) * 100);
+  
   const color = occupancyRingColor(pct);
   const label = occupancyStatusLabel(pct);
 
