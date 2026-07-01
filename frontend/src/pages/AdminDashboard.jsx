@@ -11,8 +11,14 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { useCollection } from "../hooks/useFirestore";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { useRouteProgress } from "../hooks/useRouteProgress";
+import { useSmoothedPosition } from "../hooks/useSmoothedPosition";
+import { groupWaitingByStop } from "../hooks/useRouteDemand";
 import { getAnalyticsInsights } from "../services/api";
-import { DEFAULT_CENTER, MAPS_API_KEY, occupancyColor, GRAY_MAP_STYLE } from "../services/maps";
+import {
+  DEFAULT_CENTER, MAPS_API_KEY, occupancyColor, GRAY_MAP_STYLE, ROUTE_STOPS,
+  demandTier, DEMAND_CIRCLE_RADIUS_M, DEMAND_CIRCLE_OPACITY, normalizePolyline,
+} from "../services/maps";
 import KPICards from "../components/cooperative/KPICards";
 import AIInsights from "../components/cooperative/AIInsights";
 
@@ -44,10 +50,27 @@ export default function AdminDashboard() {
   const [moreOpen, setMoreOpen] = useState(false);
   const isMobile = useIsMobile(1024);
 
+  // Tabs mount lazily on first visit, then stay mounted (true keep-alive) —
+  // previously all 8 tabs (including two live GoogleMap instances, in Live
+  // Operations and Routes) mounted immediately and re-ran their hooks/effects
+  // on every Firestore tick from any of the 4 subscribed collections,
+  // regardless of which tab was actually visible.
+  const [visited, setVisited] = useState(() => new Set(["dashboard"]));
+
+  function selectTab(id) {
+    setActive(id);
+    setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }
+
   const { data: drivers    } = useCollection("drivers",    [["route",  "==", "R01"]]);
   const { data: passengers } = useCollection("passengers", [["route",  "==", "R01"], ["status", "==", "waiting"]]);
   const { data: stops      } = useCollection("stops");
   const { data: routes     } = useCollection("routes");
+
+  // Computed once from the passengers fetch above and passed down, rather
+  // than having Live Operations and Demand each open their own redundant
+  // Firestore listener for the identical route/status query.
+  const countsByStop = useMemo(() => groupWaitingByStop(passengers), [passengers]);
 
   const kpis = {
     totalWaiting:    passengers.length,
@@ -60,11 +83,11 @@ export default function AdminDashboard() {
 
   const content = {
     dashboard: <DashboardPage kpis={kpis} drivers={drivers} passengers={passengers} />,
-    "live-ops": <LiveOpsPage drivers={drivers} passengers={passengers} routes={routes} isActive={active === "live-ops"} />,
+    "live-ops": <LiveOpsPage drivers={drivers} routes={routes} countsByStop={countsByStop} totalWaiting={kpis.totalWaiting} isActive={active === "live-ops"} />,
     fleet:      <FleetPage drivers={drivers} />,
     drivers:    <DriversPage drivers={drivers} />,
     routes:     <RoutesPage routes={routes} stops={stops} passengers={passengers} />,
-    demand:     <DemandPage stops={stops} passengers={passengers} />,
+    demand:     <DemandPage countsByStop={countsByStop} totalWaiting={kpis.totalWaiting} />,
     analytics:  <AnalyticsPage kpis={kpis} drivers={drivers} stops={stops} passengers={passengers} />,
     settings:   <SettingsPage />,
   };
@@ -108,24 +131,27 @@ export default function AdminDashboard() {
           </button>
         </header>
 
-        {/* Content — all tabs stay mounted; inactive ones are hidden to keep GoogleMap alive */}
+        {/* Content — tabs mount on first visit, then stay mounted (keep-alive);
+            inactive-but-visited ones are hidden, not unmounted */}
         <main className="relative flex-1 overflow-hidden">
-          {Object.entries(content).map(([id, node]) => (
-            <div
-              key={id}
-              className="absolute inset-0 overflow-y-auto"
-              style={{ visibility: active === id ? "visible" : "hidden" }}
-            >
-              {node}
-            </div>
-          ))}
+          {Object.entries(content)
+            .filter(([id]) => visited.has(id))
+            .map(([id, node]) => (
+              <div
+                key={id}
+                className="absolute inset-0 overflow-y-auto"
+                style={{ visibility: active === id ? "visible" : "hidden" }}
+              >
+                {node}
+              </div>
+            ))}
         </main>
 
         {/* Bottom nav */}
         <MobileBottomNav
           items={primaryItems}
           active={active}
-          onChange={(id) => { setActive(id); setMoreOpen(false); }}
+          onChange={(id) => { selectTab(id); setMoreOpen(false); }}
           moreActive={MOBILE_MORE_IDS.includes(active)}
           onMore={() => setMoreOpen(true)}
         />
@@ -134,7 +160,7 @@ export default function AdminDashboard() {
           <MoreSheet
             items={moreItems}
             active={active}
-            onSelect={(id) => { setActive(id); setMoreOpen(false); }}
+            onSelect={(id) => { selectTab(id); setMoreOpen(false); }}
             onClose={() => setMoreOpen(false)}
           />
         )}
@@ -166,7 +192,7 @@ export default function AdminDashboard() {
             return (
               <button
                 key={id}
-                onClick={() => setActive(id)}
+                onClick={() => selectTab(id)}
                 className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium mb-0.5 transition-colors
                   ${isActive
                     ? "bg-pasada-rust text-white"
@@ -195,17 +221,20 @@ export default function AdminDashboard() {
         </div>
       </aside>
 
-      {/* Main content — all tabs stay mounted; inactive ones are hidden to keep GoogleMap alive */}
+      {/* Main content — tabs mount on first visit, then stay mounted (keep-alive);
+          inactive-but-visited ones are hidden, not unmounted */}
       <main className="flex-1 overflow-hidden relative">
-        {Object.entries(content).map(([id, node]) => (
-          <div
-            key={id}
-            className="absolute inset-0 overflow-y-auto"
-            style={{ visibility: active === id ? "visible" : "hidden" }}
-          >
-            {node}
-          </div>
-        ))}
+        {Object.entries(content)
+          .filter(([id]) => visited.has(id))
+          .map(([id, node]) => (
+            <div
+              key={id}
+              className="absolute inset-0 overflow-y-auto"
+              style={{ visibility: active === id ? "visible" : "hidden" }}
+            >
+              {node}
+            </div>
+          ))}
       </main>
     </div>
   );
@@ -392,7 +421,7 @@ function DashboardPage({ kpis, drivers, passengers }) {
 
 // ── Live Operations Page ───────────────────────────────────────────────────────
 
-function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
+function LiveOpsPage({ drivers, routes = [], countsByStop, totalWaiting, isActive }) {
   const [selectedDriver, setSelectedDriver] = useState(null);
   const mapRef = useRef(null);
   const isMobile = useIsMobile(1024);
@@ -405,16 +434,10 @@ function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
   }, [isActive]);
 
   const activeDrivers = useMemo(() => drivers.filter((d) => d.lat && d.lng), [drivers]);
-  const waitingPassengers = useMemo(
-    () => passengers.filter((p) => typeof p.lat === "number" && typeof p.lng === "number"),
-    [passengers]
-  );
 
   const routePolyline = useMemo(() => {
     const rd = routes.find((r) => r.route_id === "R01");
-    return (rd?.polyline ?? []).map((p) =>
-      Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }
-    );
+    return normalizePolyline(rd?.polyline ?? []);
   }, [routes]);
 
   const jeepIcon = (color) => MAPS_API_KEY ? {
@@ -427,23 +450,16 @@ function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
     anchor: { x: 12, y: 22 },
   } : undefined;
 
-  // Aggregate passengers by approximate position (≈11m grid) for density coloring
-  const demandSpots = useMemo(() => {
-    const map = new Map();
-    for (const p of waitingPassengers) {
-      const key = `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
-      if (!map.has(key)) map.set(key, { lat: p.lat, lng: p.lng, count: 0 });
-      map.get(key).count++;
-    }
-    return [...map.values()];
-  }, [waitingPassengers]);
-
-  function demandColor(cnt) {
-    if (cnt <= 2) return "#2563EB";
-    if (cnt <= 4) return "#0D9488";
-    if (cnt <= 7) return "#F97316";
-    return "#D90429";
-  }
+  // Same live source of truth (and same tiers/colors) as Driver's own heatmap
+  // — previously this page independently re-aggregated raw passenger
+  // positions into an ~11m grid using a different 4-tier color scheme, so
+  // Driver and Admin could visibly disagree about the same demand. Passed
+  // down from AdminDashboard (which already fetches passengers for its own
+  // KPIs) instead of opening a second listener for the same query here.
+  const demandStops = useMemo(
+    () => ROUTE_STOPS.filter((s) => (countsByStop[s.name] ?? 0) > 0),
+    [countsByStop]
+  );
 
   return (
     <div className="p-4 space-y-4 lg:p-8">
@@ -478,31 +494,31 @@ function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
                 />
               )}
 
-              {/* Density heatmap — two concentric circles, cool-to-hot by passenger count */}
-              {demandSpots.flatMap((s) => {
-                const color = demandColor(s.count);
-                return [
-                  <CircleF key={`${s.lat},${s.lng}-o`} center={{ lat: s.lat, lng: s.lng }}
-                    radius={100 + s.count * 20}
-                    options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.11 }} />,
-                  <CircleF key={`${s.lat},${s.lng}-i`} center={{ lat: s.lat, lng: s.lng }}
-                    radius={45 + s.count * 8}
-                    options={{ strokeWeight: 0, fillColor: color, fillOpacity: 0.30 }} />,
-                ];
-              })}
-
-              {/* Driver/jeep markers — colored by occupancy */}
-              {activeDrivers.map((d) => {
-                const color = occupancyColor(d.occupancy_pct ?? 0);
+              {/* Density heatmap — same tiers/colors/radius as Driver's page */}
+              {demandStops.map((s) => {
+                const tier = demandTier(countsByStop[s.name]);
                 return (
-                  <Marker
-                    key={d.uid}
-                    position={{ lat: d.lat, lng: d.lng }}
-                    icon={jeepIcon(color)}
-                    onClick={() => setSelectedDriver(d)}
+                  <CircleF
+                    key={s.id}
+                    center={{ lat: s.lat, lng: s.lng }}
+                    radius={DEMAND_CIRCLE_RADIUS_M}
+                    options={{ strokeWeight: 0, fillColor: tier.color, fillOpacity: DEMAND_CIRCLE_OPACITY }}
                   />
                 );
               })}
+
+              {/* Driver/jeep markers — colored by occupancy, smoothly
+                  interpolated and route-snapped via the same shared hook
+                  Driver's page uses, instead of snapping to the raw tick */}
+              {activeDrivers.map((d) => (
+                <TrackedJeepMarker
+                  key={d.uid}
+                  driver={d}
+                  polylinePath={routePolyline}
+                  jeepIcon={jeepIcon(occupancyColor(d.occupancy_pct ?? 0))}
+                  onClick={() => setSelectedDriver(d)}
+                />
+              ))}
 
               {selectedDriver && (
                 <InfoWindow
@@ -542,11 +558,11 @@ function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
           </div>
 
           {/* Waiting passengers summary */}
-          {waitingPassengers.length > 0 && (
+          {totalWaiting > 0 && (
             <div className="rounded-xl bg-pasada-rust/5 border border-pasada-rust/20 px-3 py-2 flex items-center gap-2">
               <span className="size-2.5 rounded-full bg-pasada-rust shrink-0" />
               <span className="text-xs text-pasada-rust font-semibold">
-                {waitingPassengers.length} passenger{waitingPassengers.length !== 1 ? "s" : ""} waiting — heatmap shown
+                {totalWaiting} passenger{totalWaiting !== 1 ? "s" : ""} waiting — heatmap shown
               </span>
             </div>
           )}
@@ -590,6 +606,22 @@ function LiveOpsPage({ drivers, passengers, routes = [], isActive }) {
       </div>
     </div>
   );
+}
+
+// ── Tracked jeepney marker ──────────────────────────────────────────────────
+// Renders a jeep at its route-projected, 60fps-smoothed position instead of
+// snapping to the raw Firestore tick every ~500ms — the same shared logic
+// Driver's page uses. Kept as its own small component deliberately: the
+// 60fps smoothing re-renders whatever calls it every frame, so isolating it
+// here means only this one Marker re-renders that often, not the whole page.
+
+function TrackedJeepMarker({ driver, polylinePath, jeepIcon, onClick }) {
+  const { leadPoint, remainingPath } = useRouteProgress({
+    lat: driver.lat, lng: driver.lng, polyline: polylinePath, resetKey: driver.uid,
+  });
+  const { pos } = useSmoothedPosition(leadPoint, remainingPath.length > 1 ? remainingPath[1] : null);
+  if (!pos) return null;
+  return <Marker position={pos} icon={jeepIcon} onClick={onClick} />;
 }
 
 // ── Fleet Management Page ──────────────────────────────────────────────────────
@@ -1060,13 +1092,17 @@ function RoutesPage({ routes, stops, passengers }) {
 
 // ── Passenger Demand Page ──────────────────────────────────────────────────────
 
-function DemandPage({ stops, passengers }) {
+// countsByStop/totalWaiting come from AdminDashboard's own passengers fetch
+// (live collection, not the denormalized stops.count field, which only ever
+// increments — cancel-waiting never decrements it — and can silently
+// disagree with the real live count) rather than opening a second listener
+// for the same query here.
+function DemandPage({ countsByStop, totalWaiting }) {
   const isMobile = useIsMobile(1024);
-  const totalWaiting = passengers.length;
 
-  const stopDemand = stops.map((s) => ({
-    name: s.name ?? s.stop ?? s.id,
-    count: s.count ?? passengers.filter((p) => p.stop === (s.name ?? s.stop)).length,
+  const stopDemand = ROUTE_STOPS.map((s) => ({
+    name: s.name,
+    count: countsByStop[s.name] ?? 0,
     lat: s.lat,
     lng: s.lng,
   }));

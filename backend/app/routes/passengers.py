@@ -67,4 +67,10 @@ def cancel_waiting(
     status = reason if reason in VALID_EXIT_REASONS else "cancelled"
     firebase_service.set_doc("passengers", passenger_id, {"status": status})
     # TODO: decrement stop demand counter atomically
+    # Note: this counter is no longer read by the frontend for anything shown
+    # to a user — Driver/Passenger/Admin all compute live waiting-passenger
+    # counts directly from the passengers collection (status == "waiting")
+    # instead, specifically because this counter only ever increments and
+    # drifts stale. Left in place in case something else still depends on it;
+    # not removed as part of that frontend change.
     return {"message": f"Waiting status set to '{status}'."}

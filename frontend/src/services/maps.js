@@ -50,6 +50,41 @@ export const DEMO_POLYLINE = [
   [14.2817, 121.4150],  // Sta. Cruz Plaza
 ];
 
+// Demand heatmap tiers — discrete, brand-aligned colors so it reads at a
+// glance. Shared by every page that renders a demand heatmap (Driver, Admin)
+// so they can never visually disagree about what "high demand" looks like.
+// Radius/opacity are fixed per tier on purpose: color alone should carry the
+// signal, not a second (size/opacity) variable.
+export const DEMAND_TIERS = [
+  { max: 3,        color: "#388E3C", label: "Low (1–3)"    },
+  { max: 7,        color: "#F57C00", label: "Medium (4–7)" },
+  { max: Infinity, color: "#D32F2F", label: "High (8+)"    },
+];
+export const DEMAND_CIRCLE_RADIUS_M = 120;
+export const DEMAND_CIRCLE_OPACITY  = 0.32;
+
+export function demandTier(cnt) {
+  return DEMAND_TIERS.find((t) => cnt <= t.max) ?? DEMAND_TIERS[DEMAND_TIERS.length - 1];
+}
+
+// Compass heading (0=N, 90=E, ...) from point p1 to p2. Shared by any page
+// that needs to orient a marker or the map camera along the route.
+export function bearing(p1, p2) {
+  const toR = (d) => (d * Math.PI) / 180;
+  const [lat1, lng1] = Array.isArray(p1) ? p1 : [p1.lat, p1.lng];
+  const [lat2, lng2] = Array.isArray(p2) ? p2 : [p2.lat, p2.lng];
+  const dLng = toR(lng2 - lng1);
+  const y = Math.sin(dLng) * Math.cos(toR(lat2));
+  const x = Math.cos(toR(lat1)) * Math.sin(toR(lat2)) - Math.sin(toR(lat1)) * Math.cos(toR(lat2)) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+// Normalizes a raw Firestore polyline (array of [lat,lng] tuples or
+// {lat,lng} objects) into a consistent {lat,lng}[] shape.
+export function normalizePolyline(polyline) {
+  return polyline.map((p) => (Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }));
+}
+
 export function occupancyColor(pct) {
   if (pct > 85) return "#D32F2F";
   if (pct > 50) return "#F57C00";

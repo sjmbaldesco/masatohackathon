@@ -1,18 +1,21 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { getDoc, doc } from "firebase/firestore";
-import { GoogleMap, Marker, PolylineF, DirectionsRenderer, OverlayView } from "@react-google-maps/api";
+import { GoogleMap, Marker, PolylineF, OverlayView } from "@react-google-maps/api";
 import {
   Home, Map as MapIcon, User, LogOut, X, ChevronRight,
   Clock, Search, MapPin, Bus, Mic, LocateFixed,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useCollection } from "../hooks/useFirestore";
+import { useRouteProgress } from "../hooks/useRouteProgress";
+import { useSmoothedPosition } from "../hooks/useSmoothedPosition";
+import { useRouteDemand } from "../hooks/useRouteDemand";
 import { broadcastWaiting, cancelWaiting } from "../services/api";
 import { db } from "../services/firebase";
 import TabBar from "../components/shared/TabBar";
 import {
   DEFAULT_CENTER, ROUTE_STOPS, DEMO_POLYLINE, GRAY_MAP_STYLE,
-  MAPS_API_KEY, etaMinutes, occupancyColor, occupancyLabel,
+  MAPS_API_KEY, etaMinutes, occupancyColor, occupancyLabel, normalizePolyline,
 } from "../services/maps";
 
 const CAPACITY = 18;
@@ -63,18 +66,18 @@ export default function PassengerPage() {
   const { data: drivers } = useCollection("drivers", [["route", "==", ROUTE_ID]]);
   const activeDrivers     = drivers.filter((d) => d.status !== "ended" && d.lat && d.lng);
 
+  // Same route polyline Driver/Admin read — the jeep's route line is drawn
+  // from this everywhere, so it can never visibly disagree with where the
+  // jeep is actually walking (previously this page independently computed
+  // its own line via Directions API / a hardcoded fallback).
+  const { data: routeDocs } = useCollection("routes");
+  const route = routeDocs?.find((r) => r.route_id === ROUTE_ID) ?? {};
+  const polyline = route.polyline?.length ? route.polyline : DEMO_POLYLINE;
+  const polylinePath = useMemo(() => normalizePolyline(polyline), [polyline]);
+
   // Other passengers currently waiting on this route — read live so everyone
   // (not just the driver/admin) can see demand at each stop, not just the jeep.
-  const { data: waitingPassengers } = useCollection(
-    "passengers", [["route", "==", ROUTE_ID], ["status", "==", "waiting"]]
-  );
-  const waitingCounts = useMemo(() => {
-    const counts = {};
-    for (const p of waitingPassengers) {
-      if (p.stop) counts[p.stop] = (counts[p.stop] ?? 0) + 1;
-    }
-    return counts;
-  }, [waitingPassengers]);
+  const { countsByStop: waitingCounts } = useRouteDemand(ROUTE_ID);
   // Pick the jeep with the smallest ETA to the selected stop
   const nearestJeep = selectedStop
     ? activeDrivers.reduce((best, d) => {
@@ -142,6 +145,7 @@ export default function PassengerPage() {
           etaProgress={etaProgress}
           userLocation={userLocation}
           waitingCounts={waitingCounts}
+          polylinePath={polylinePath}
         />
       )}
       {activeTab === "map" && (
@@ -152,6 +156,7 @@ export default function PassengerPage() {
           onSelectStop={setSelectedStop}
           userLocation={userLocation}
           waitingCounts={waitingCounts}
+          polylinePath={polylinePath}
         />
       )}
       {activeTab === "profile" && <ProfileTab user={user} onLogout={logout} />}
@@ -165,10 +170,9 @@ export default function PassengerPage() {
 
 // ── Home Tab ──────────────────────────────────────────────────────────────────
 
-function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onBoarded, currentEta, etaProgress, userLocation, waitingCounts = {} }) {
+function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onBoarded, currentEta, etaProgress, userLocation, waitingCounts = {}, polylinePath }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen,  setSearchOpen]  = useState(false);
-  const [directions,  setDirections]  = useState(null);
   const mapRef = useRef(null);
 
   const occCount = nearestJeep?.occupancy_count ?? 0;
@@ -177,18 +181,24 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
   const occPct   = Math.round((occCount / CAPACITY) * 100);
   const dotColor = occupancyColor(occPct);
 
-  const mapCenter = nearestJeep?.lat
-    ? { lat: nearestJeep.lat, lng: nearestJeep.lng }
-    : DEFAULT_CENTER;
-
   const jeepIcon = MAPS_API_KEY ? {
     path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z",
     fillColor: "#EF233C", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2, scale: 1.4,
     anchor: { x: 12, y: 22 },
   } : undefined;
 
-  const jeepStopIdx  = ROUTE_STOPS.findIndex((s) => s.name === nearestJeep?.current_stop);
-  const jeepRoutePct = jeepStopIdx >= 0 ? jeepStopIdx / (ROUTE_STOPS.length - 1) : etaProgress;
+  // Same route-projected position Driver uses (see useRouteProgress) —
+  // nearestStopIndex replaces the old fragile string-match against
+  // current_stop, which is written by three different code paths and can go
+  // stale/mismatched. Tick-rate only (~500ms), not the 60fps smoothed
+  // position — that's not needed here (the progress bar already animates
+  // visually via a CSS transition) and would otherwise re-render this whole
+  // tab 60x/sec just to move a percentage.
+  const { leadPoint: nearestJeepLead, nearestStopIndex } = useRouteProgress({
+    lat: nearestJeep?.lat, lng: nearestJeep?.lng, polyline: polylinePath,
+    routeStops: ROUTE_STOPS, resetKey: nearestJeep?.uid,
+  });
+  const jeepRoutePct = nearestStopIndex >= 0 ? nearestStopIndex / (ROUTE_STOPS.length - 1) : etaProgress;
 
   const filteredStops = searchQuery
     ? ROUTE_STOPS.filter((s) => s.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -201,21 +211,9 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
     mapRef.current?.panTo({ lat: stop.lat, lng: stop.lng });
   }
 
-  // Directions: jeep → selected stop; falls back to user location or route start
-  useEffect(() => {
-    if (!selectedStop || !window.google?.maps) return;
-    const origin = nearestJeep?.lat
-      ? { lat: nearestJeep.lat, lng: nearestJeep.lng }
-      : userLocation ?? { lat: ROUTE_STOPS[0].lat, lng: ROUTE_STOPS[0].lng };
-    new window.google.maps.DirectionsService().route(
-      { origin, destination: { lat: selectedStop.lat, lng: selectedStop.lng }, travelMode: "DRIVING" },
-      (result, status) => { if (status === "OK") setDirections(result); }
-    );
-  }, [selectedStop?.id, !!nearestJeep?.lat]);
-
   function recenterOnJeep() {
-    if (nearestJeep?.lat && mapRef.current)
-      mapRef.current.panTo({ lat: nearestJeep.lat, lng: nearestJeep.lng });
+    if (nearestJeepLead && mapRef.current)
+      mapRef.current.panTo(nearestJeepLead);
     else if (userLocation && mapRef.current)
       mapRef.current.panTo(userLocation);
   }
@@ -227,7 +225,7 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
         {MAPS_API_KEY ? (
           <GoogleMap
             mapContainerStyle={{ width: "100%", height: "100%" }}
-            center={mapCenter}
+            center={DEFAULT_CENTER}
             zoom={14}
             options={MAP_OPTIONS}
             onLoad={(map) => { mapRef.current = map; }}
@@ -235,20 +233,11 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
             {/* User location — person icon */}
             {userLocation && <PersonMarker position={userLocation} />}
 
-            {/* Directions route (real roads) or fallback demo polyline */}
-            {directions ? (
-              <DirectionsRenderer
-                directions={directions}
-                options={{
-                  suppressMarkers: true,
-                  polylineOptions: { strokeColor: "#EF233C", strokeWeight: 4, strokeOpacity: 0.75 },
-                }}
-              />
-            ) : (
-              <PolylineF
-                path={DEMO_POLYLINE.map(([lat, lng]) => ({ lat, lng }))}
-                options={{ strokeColor: "#EF233C", strokeWeight: 3, strokeOpacity: 0.6 }}
-              />
+            {/* Route line — same routes/R01.polyline Driver/Admin read, so the
+                jeep is never visibly off-road here like it could be for the
+                previous Directions-API/demo-fallback line. */}
+            {polylinePath.length > 1 && (
+              <PolylineF path={polylinePath} options={{ strokeColor: "#EF233C", strokeWeight: 4, strokeOpacity: 0.75 }} />
             )}
 
             {/* Stop markers — clickable to set destination; badge shows other
@@ -263,16 +252,16 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
               />
             ))}
 
-            {/* All active jeepney markers */}
+            {/* All active jeepney markers — smoothly interpolated and
+                route-snapped via the same shared hook Driver uses, instead of
+                snapping to the raw Firestore tick every ~500ms. */}
             {allJeeps.map((jeep) => (
-              <Marker
+              <TrackedJeepMarker
                 key={jeep.uid ?? jeep.id}
-                position={{ lat: jeep.lat, lng: jeep.lng }}
-                icon={{
-                  ...jeepIcon,
-                  fillColor: jeep.uid === nearestJeep?.uid ? "#EF233C" : "#8D99AE",
-                  scale: jeep.uid === nearestJeep?.uid ? 1.4 : 1.1,
-                }}
+                jeep={jeep}
+                polylinePath={polylinePath}
+                jeepIcon={jeepIcon}
+                isNearest={jeep.uid === nearestJeep?.uid}
               />
             ))}
           </GoogleMap>
@@ -455,30 +444,10 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
 
 // ── Map Tab ───────────────────────────────────────────────────────────────────
 
-function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLocation, waitingCounts = {} }) {
+function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLocation, waitingCounts = {}, polylinePath }) {
   const [tappedStop,      setTappedStop]      = useState(null);
   const [searchQuery,     setSearchQuery]      = useState("");
-  const [routeDirections, setRouteDirections]  = useState(null);
   const mapRef = useRef(null);
-
-  // Fetch the real road route once using Directions API with all stops as waypoints
-  useEffect(() => {
-    if (!window.google?.maps || !MAPS_API_KEY) return;
-    const waypoints = ROUTE_STOPS.slice(1, -1).map((s) => ({
-      location: { lat: s.lat, lng: s.lng },
-      stopover: true,
-    }));
-    new window.google.maps.DirectionsService().route(
-      {
-        origin:             { lat: ROUTE_STOPS[0].lat,                         lng: ROUTE_STOPS[0].lng },
-        destination:        { lat: ROUTE_STOPS[ROUTE_STOPS.length - 1].lat,    lng: ROUTE_STOPS[ROUTE_STOPS.length - 1].lng },
-        waypoints,
-        optimizeWaypoints:  false,
-        travelMode:         window.google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => { if (status === "OK") setRouteDirections(result); }
-    );
-  }, []);
 
   const filteredStops = searchQuery
     ? ROUTE_STOPS.filter((s) => s.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -520,20 +489,9 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
           options={MAP_OPTIONS}
           onLoad={(map) => { mapRef.current = map; }}
         >
-          {/* Real road route from Directions API, fallback to demo polyline */}
-          {routeDirections ? (
-            <DirectionsRenderer
-              directions={routeDirections}
-              options={{
-                suppressMarkers: true,
-                polylineOptions: { strokeColor: "#EF233C", strokeWeight: 4, strokeOpacity: 0.7 },
-              }}
-            />
-          ) : (
-            <PolylineF
-              path={DEMO_POLYLINE.map(([lat, lng]) => ({ lat, lng }))}
-              options={{ strokeColor: "#EF233C", strokeWeight: 3, strokeOpacity: 0.55 }}
-            />
+          {/* Route line — same routes/R01.polyline Driver/Admin read */}
+          {polylinePath.length > 1 && (
+            <PolylineF path={polylinePath} options={{ strokeColor: "#EF233C", strokeWeight: 4, strokeOpacity: 0.7 }} />
           )}
 
           {/* Clickable stop markers — badge shows other passengers waiting there */}
@@ -551,16 +509,15 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
             />
           ))}
 
-          {/* All active jeepney markers */}
+          {/* All active jeepney markers — smoothly interpolated and
+              route-snapped via the same shared hook Driver uses */}
           {allJeeps.map((jeep) => (
-            <Marker
+            <TrackedJeepMarker
               key={jeep.uid ?? jeep.id}
-              position={{ lat: jeep.lat, lng: jeep.lng }}
-              icon={{
-                ...jeepIcon,
-                fillColor: jeep.uid === nearestJeep?.uid ? "#EF233C" : "#8D99AE",
-                scale: jeep.uid === nearestJeep?.uid ? 1.4 : 1.1,
-              }}
+              jeep={jeep}
+              polylinePath={polylinePath}
+              jeepIcon={jeepIcon}
+              isNearest={jeep.uid === nearestJeep?.uid}
             />
           ))}
 
@@ -611,6 +568,31 @@ function MapTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, userLo
         </div>
       )}
     </div>
+  );
+}
+
+// ── Tracked jeepney marker ──────────────────────────────────────────────────
+// Renders a jeep at its route-projected, 60fps-smoothed position instead of
+// snapping to the raw Firestore tick every ~500ms — the same shared logic
+// Driver's page uses. Kept as its own small component deliberately: the
+// 60fps smoothing re-renders whatever calls it every frame, so isolating it
+// here means only this one Marker re-renders that often, not the whole tab.
+
+function TrackedJeepMarker({ jeep, polylinePath, jeepIcon, isNearest }) {
+  const { leadPoint, remainingPath } = useRouteProgress({
+    lat: jeep.lat, lng: jeep.lng, polyline: polylinePath, resetKey: jeep.uid,
+  });
+  const { pos } = useSmoothedPosition(leadPoint, remainingPath.length > 1 ? remainingPath[1] : null);
+  if (!pos) return null;
+  return (
+    <Marker
+      position={pos}
+      icon={{
+        ...jeepIcon,
+        fillColor: isNearest ? "#EF233C" : "#8D99AE",
+        scale: isNearest ? 1.4 : 1.1,
+      }}
+    />
   );
 }
 

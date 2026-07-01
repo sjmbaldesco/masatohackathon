@@ -14,7 +14,13 @@ import TabBar from "../components/shared/TabBar";
 import DepartureScore from "../components/driver/DepartureScore";
 import OccupancyModal from "../components/driver/OccupancyModal";
 import { startSim, stopSim } from "../services/sim";
-import { DEFAULT_CENTER, DEMO_POLYLINE, MAPS_API_KEY, GRAY_MAP_STYLE, ROUTE_STOPS, occupancyColor, projectPointOntoPolylineWithProgress } from "../services/maps";
+import {
+  DEFAULT_CENTER, DEMO_POLYLINE, MAPS_API_KEY, GRAY_MAP_STYLE, ROUTE_STOPS, occupancyColor,
+  bearing, normalizePolyline, DEMAND_TIERS, demandTier, DEMAND_CIRCLE_RADIUS_M, DEMAND_CIRCLE_OPACITY,
+} from "../services/maps";
+import { useRouteProgress } from "../hooks/useRouteProgress";
+import { useSmoothedPosition } from "../hooks/useSmoothedPosition";
+import { useRouteDemand } from "../hooks/useRouteDemand";
 
 const CAPACITY = 18;
 const ROUTE_ID = "R01";
@@ -36,31 +42,6 @@ const MAP_OPTIONS = {
 // GoogleMap's center-sync effect re-fire and fight the imperative follow pan.
 const INITIAL_CENTER = { lat: ROUTE_STOPS[0].lat, lng: ROUTE_STOPS[0].lng };
 
-// Demand heatmap tiers — discrete, brand-aligned colors so it reads at a glance.
-// Radius/opacity are fixed per tier on purpose: color alone should carry the signal.
-const DEMAND_TIERS = [
-  { max: 3,        color: "#388E3C", label: "Low (1–3)"    },
-  { max: 7,        color: "#F57C00", label: "Medium (4–7)" },
-  { max: Infinity, color: "#D32F2F", label: "High (8+)"    },
-];
-const DEMAND_CIRCLE_RADIUS_M = 120;
-const DEMAND_CIRCLE_OPACITY  = 0.32;
-
-function demandTier(cnt) {
-  return DEMAND_TIERS.find((t) => cnt <= t.max) ?? DEMAND_TIERS[DEMAND_TIERS.length - 1];
-}
-
-// Compute compass heading from point p1 to p2
-function bearing(p1, p2) {
-  const toR = (d) => (d * Math.PI) / 180;
-  const [lat1, lng1] = Array.isArray(p1) ? p1 : [p1.lat, p1.lng];
-  const [lat2, lng2] = Array.isArray(p2) ? p2 : [p2.lat, p2.lng];
-  const dLng = toR(lng2 - lng1);
-  const y = Math.sin(dLng) * Math.cos(toR(lat2));
-  const x = Math.cos(toR(lat1)) * Math.sin(toR(lat2)) - Math.sin(toR(lat1)) * Math.cos(toR(lat2)) * Math.cos(dLng);
-  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
-}
-
 export default function DriverPage() {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState("home");
@@ -74,8 +55,10 @@ export default function DriverPage() {
   const driver = driverDocs?.[0] ?? {};
   const tripActive = driver.status === "in_transit";
 
-  const { data: stops } = useCollection("stops", [["route", "==", ROUTE_ID]]);
-  const totalWaiting = stops.reduce((s, st) => s + (st.count ?? 0), 0);
+  // Single shared source of truth for "how many passengers are waiting where" —
+  // reads the live passengers collection rather than the denormalized
+  // stops.count field, which can drift stale (cancel-waiting never decrements it).
+  const { countsByStop, totalWaiting } = useRouteDemand(ROUTE_ID);
 
   const { data: routeDocs } = useCollection("routes");
   const route = routeDocs?.find((r) => r.route_id === ROUTE_ID) ?? {};
@@ -181,7 +164,7 @@ export default function DriverPage() {
           polyline={polyline}
           tripActive={tripActive}
           totalWaiting={totalWaiting}
-          stops={stops}
+          countsByStop={countsByStop}
           occCount={occCount}
           occHex={occHex}
           route={route}
@@ -222,56 +205,15 @@ export default function DriverPage() {
 const JEEP_PIXEL_OFFSET = (w, h) => ({ x: -(w / 2), y: -(h / 2) });
 
 /**
- * Interpolates the jeepney SVG marker at 60fps between ticks. Position and
- * heading both come from `remainingPath` (already snapped onto the route and
- * progress-clamped upstream — see useRouteProgress) rather than re-projecting
- * raw coordinates here: remainingPath[0] is the marker's target position, and
- * remainingPath[1] (the next vertex ahead) is what it faces toward. Also
- * drives the map camera via panTo — but only while isFollowingRef is true, so
- * it never fights a user who's mid-drag.
+ * Owns the 60fps position/heading tween itself (via useSmoothedPosition),
+ * kept as a small leaf component deliberately — MapHomeTab only calls the
+ * tick-rate `useRouteProgress` (once per ~500ms), so the frame-by-frame
+ * re-renders needed to animate this marker stay isolated to just this
+ * component instead of re-rendering the whole page (status cards, bottom
+ * overlay, etc.) 60 times a second.
  */
-function AnimatedJeepMarker({ remainingPath, mapRef, isFollowingRef }) {
-  const to = remainingPath[0];
-  const nextPoint = remainingPath.length > 1 ? remainingPath[1] : null;
-
-  const [pos, setPos]         = useState(to);
-  const [heading, setHeading] = useState(() => (nextPoint ? bearing(to, nextPoint) : 0));
-  const currentPos = useRef(to);
-  const rafRef      = useRef(null);
-
-  useEffect(() => {
-    if (!to) return;
-    const from = { ...currentPos.current };
-
-    if (nextPoint) setHeading(bearing(to, nextPoint));
-
-    // Camera follow: pan once per tick via the map's own animated panTo, not
-    // every rAF frame. Calling setCenter 60x/sec was fighting the browser's
-    // own zoom/scroll-wheel handling, which is what made zooming feel jittery.
-    // The marker itself still tweens smoothly below, independent of this.
-    if (isFollowingRef.current && mapRef.current) mapRef.current.panTo(to);
-
-    const t0       = performance.now();
-    const DURATION = 460; // slightly under the 500ms sim tick
-
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-
-    function step(now) {
-      const t    = Math.min((now - t0) / DURATION, 1);
-      const ease = 1 - (1 - t) * (1 - t); // ease-out quad
-      const next = {
-        lat: from.lat + (to.lat - from.lat) * ease,
-        lng: from.lng + (to.lng - from.lng) * ease,
-      };
-      currentPos.current = next;
-      setPos(next);
-      if (t < 1) rafRef.current = requestAnimationFrame(step);
-    }
-
-    rafRef.current = requestAnimationFrame(step);
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, [to, nextPoint]);
-
+function AnimatedJeepMarker({ leadPoint, nextPoint }) {
+  const { pos, heading } = useSmoothedPosition(leadPoint, nextPoint);
   return (
     <OverlayView
       position={pos}
@@ -406,56 +348,9 @@ function JeepneyMarker({ heading = 0 }) {
   );
 }
 
-// ── Route progress tracking ────────────────────────────────────────────────────
-
-/**
- * Tracks how far along the route polyline the driver has progressed, and
- * derives the trimmed "remaining" path — from the current position onward —
- * so the line behind the jeep can be hidden instead of drawing the whole
- * route start-to-finish for the entire trip.
- *
- * Progress (segment index + fraction within it) only ever moves forward:
- * GPS/sim jitter that projects the raw position slightly backward between
- * ticks is ignored rather than trimming the line back, which would otherwise
- * flicker/re-extend it. Resets when a new trip starts (tripActive flips
- * false -> true) so a fresh trip doesn't inherit the previous trip's progress.
- */
-function useRouteProgress(rawLat, rawLng, polylinePath, tripActive) {
-  const furthestRef = useRef({ progress: -1, index: 0, point: null });
-  const [result, setResult] = useState(() => ({
-    leadPoint: null,
-    remainingPath: polylinePath,
-    segmentIndex: 0,
-  }));
-
-  useEffect(() => {
-    furthestRef.current = { progress: -1, index: 0, point: null };
-  }, [tripActive]);
-
-  useEffect(() => {
-    if (rawLat == null || rawLng == null || !polylinePath || polylinePath.length < 2) return;
-
-    const { point, index, t } = projectPointOntoPolylineWithProgress({ lat: rawLat, lng: rawLng }, polylinePath);
-    const progress = index + t;
-
-    if (progress >= furthestRef.current.progress) {
-      furthestRef.current = { progress, index, point };
-    }
-
-    const { index: idx, point: leadPoint } = furthestRef.current;
-    setResult({
-      leadPoint,
-      remainingPath: [leadPoint, ...polylinePath.slice(idx + 1)],
-      segmentIndex: idx,
-    });
-  }, [rawLat, rawLng, polylinePath]);
-
-  return result;
-}
-
 // ── Map Home Tab (always shows map) ───────────────────────────────────────────
 
-function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWaiting, stops, occCount, occHex, route, scoreData, scoreLoading, scoreUnavailable, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
+function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWaiting, countsByStop, occCount, occHex, route, scoreData, scoreLoading, scoreUnavailable, onFetchScore, onStartTrip, onEndTrip, onOpenModal }) {
   const [isFollowing, setIsFollowing] = useState(true);
   const isFollowingRef = useRef(true);
   useEffect(() => { isFollowingRef.current = isFollowing; }, [isFollowing]);
@@ -473,30 +368,42 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
     if (!tripActive) onFetchScore();
   }, [tripActive]);
 
-  const polylinePath = useMemo(
-    () => polyline.map((p) => Array.isArray(p) ? { lat: p[0], lng: p[1] } : { lat: p.lat, lng: p.lng }),
-    [polyline]
-  );
+  const polylinePath = useMemo(() => normalizePolyline(polyline), [polyline]);
 
   // remainingPath is the route trimmed to what's still ahead of the jeep —
-  // the traveled portion behind it is never drawn.
-  const { leadPoint, remainingPath, segmentIndex } = useRouteProgress(
-    driver.lat, driver.lng, polylinePath, tripActive
-  );
+  // the traveled portion behind it is never drawn. Shared with Passenger/Admin
+  // (see useRouteProgress) so all three pages trim/track identically instead
+  // of three independent treatments of it. Tick-rate only (~500ms) — the
+  // 60fps smoothing lives inside AnimatedJeepMarker itself, so this whole
+  // page (status cards, bottom overlay) doesn't re-render every frame just
+  // to move the marker.
+  const { leadPoint, remainingPath, segmentIndex } = useRouteProgress({
+    lat: driver.lat, lng: driver.lng, polyline: polylinePath, resetKey: tripActive,
+  });
+
+  // Camera follow: pan once per tick (leadPoint only changes once per
+  // Firestore tick, not every rAF frame) via the map's own animated panTo.
+  // Calling setCenter 60x/sec was fighting the browser's own zoom/scroll-wheel
+  // handling, which is what made zooming feel jittery.
+  useEffect(() => {
+    if (leadPoint && isFollowingRef.current && mapRef.current) mapRef.current.panTo(leadPoint);
+  }, [leadPoint]);
 
   const polylineOptions = useMemo(
     () => ({ strokeColor: "#EF233C", strokeWeight: 5, strokeOpacity: tripActive ? 1 : 0.4, zIndex: 1 }),
     [tripActive]
   );
 
-  // Memoized on `stops` alone so a driver-position tick (every 500ms) never
-  // forces the heatmap circles to be rebuilt — only real demand changes do.
+  // Memoized on `countsByStop` alone so a driver-position tick (every 500ms)
+  // never forces the heatmap circles to be rebuilt — only real demand changes
+  // do. Positioned via ROUTE_STOPS (not the stops Firestore collection) so
+  // Driver/Passenger/Admin all place these circles identically.
   const demandCircles = useMemo(
     () =>
-      stops
-        .filter((s) => s.lat && s.lng && (s.count ?? 0) > 0)
+      ROUTE_STOPS
+        .filter((s) => (countsByStop[s.name] ?? 0) > 0)
         .map((s) => {
-          const tier = demandTier(s.count);
+          const tier = demandTier(countsByStop[s.name]);
           return (
             <CircleF
               key={s.id}
@@ -506,7 +413,7 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
             />
           );
         }),
-    [stops]
+    [countsByStop]
   );
 
   function handleMapLoad(map) {
@@ -547,9 +454,8 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
                 on the leading edge of remainingPath (see useRouteProgress) */}
             {leadPoint && (
               <AnimatedJeepMarker
-                remainingPath={remainingPath}
-                mapRef={mapRef}
-                isFollowingRef={isFollowingRef}
+                leadPoint={leadPoint}
+                nextPoint={remainingPath.length > 1 ? remainingPath[1] : null}
               />
             )}
           </GoogleMap>
@@ -570,7 +476,7 @@ function MapHomeTab({ driver, mapCenter, mapRef, polyline, tripActive, totalWait
       {driver.lat && !isFollowing && (
         <button
           onClick={handleRecenter}
-          className="absolute bottom-44 right-4 z-30 flex size-12 items-center justify-center rounded-full bg-pasada-rust shadow-lg hover:shadow-xl transition-shadow"
+          className="absolute bottom-48 right-4 z-30 flex size-12 items-center justify-center rounded-full bg-pasada-rust shadow-lg hover:shadow-xl transition-shadow"
         >
           <LocateFixed size={20} className="text-pasada-cream" />
         </button>
