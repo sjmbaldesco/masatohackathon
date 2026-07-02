@@ -34,8 +34,14 @@ export default defineConfig({
     /* Collect trace when retrying the failed test. */
     trace: 'on-first-retry',
     
-    /* Record video for cinematic demo */
-    video: 'on',
+    /* Record video for cinematic demo in 1080p */
+    video: {
+      mode: 'on',
+      size: { width: 1920, height: 1080 }
+    },
+    
+    /* Force high-res viewport */
+    viewport: { width: 1920, height: 1080 },
     
     /* Add a slight delay between actions for realism */
     launchOptions: {
