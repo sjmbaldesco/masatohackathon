@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { getDoc, doc } from "firebase/firestore";
 import { GoogleMap, Marker, PolylineF, OverlayView } from "@react-google-maps/api";
 import {
-  Home, Map as MapIcon, User, LogOut, X, ChevronRight,
+  Home, Map as MapIcon, User, LogOut, X, ChevronRight, ChevronDown,
   Clock, Search, MapPin, Bus, Mic, LocateFixed,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
@@ -33,7 +33,7 @@ export default function PassengerPage() {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab]     = useState("home");
   const [selectedStop, setSelectedStop] = useState(ROUTE_STOPS[0]);
-  const [isWaiting, setIsWaiting]     = useState(false);
+  const [journeyState, setJourneyState] = useState("idle");
   const [etaStart, setEtaStart]       = useState(null);
   const [userLocation, setUserLocation] = useState(null);
 
@@ -55,7 +55,7 @@ export default function PassengerPage() {
       if (cancelled || !snap.exists()) return;
       const data = snap.data();
       if (data.status === "waiting") {
-        setIsWaiting(true);
+        setJourneyState("waiting");
         const stop = ROUTE_STOPS.find((s) => s.name === data.stop);
         if (stop) setSelectedStop(stop);
       }
@@ -88,13 +88,18 @@ export default function PassengerPage() {
       }, null)
     : activeDrivers[0] ?? null;
 
-  const currentEta = nearestJeep?.lat && selectedStop
+  let currentEta = nearestJeep?.lat && selectedStop
     ? etaMinutes(
         { lat: nearestJeep.lat, lng: nearestJeep.lng },
         { lat: selectedStop.lat, lng: selectedStop.lng },
         nearestJeep.speed_kmh || 30
       )
     : null;
+
+  // Force ETA to 0 for the cinematic demo when selecting the first stop
+  if (selectedStop?.name === "Lumban") {
+    currentEta = 0;
+  }
 
   const etaProgress = etaStart && currentEta
     ? Math.max(0, Math.min(1, 1 - currentEta / etaStart))
@@ -104,28 +109,28 @@ export default function PassengerPage() {
     if (currentEta && !etaStart) setEtaStart(currentEta);
   }, [currentEta]);
 
-  async function handleWait() {
-    try {
-      await broadcastWaiting({
-        stop: selectedStop.name,
-        route: ROUTE_ID,
-        lat: selectedStop.lat,
-        lng: selectedStop.lng,
-      });
-      setIsWaiting(true);
-      setEtaStart(currentEta);
-    } catch (e) {
-      console.error(e);
-    }
+  function handleWait() {
+    setJourneyState("waiting");
+    setEtaStart(currentEta);
+    broadcastWaiting({
+      stop: selectedStop.name,
+      route: ROUTE_ID,
+      lat: selectedStop.lat,
+      lng: selectedStop.lng,
+    }).catch(console.error);
   }
 
-  async function handleCancel(reason = "cancelled") {
-    try {
-      await cancelWaiting(user.uid, reason);
-    } catch (e) {
-      console.error(e);
+  function handleCancel(reason = "cancelled") {
+    if (reason === "boarded") {
+      setJourneyState("riding");
+    } else {
+      setJourneyState("idle");
     }
-    setIsWaiting(false);
+    cancelWaiting(user.uid, reason).catch(console.error);
+  }
+
+  function handleEndRide() {
+    setJourneyState("idle");
   }
 
   return (
@@ -137,10 +142,11 @@ export default function PassengerPage() {
           allJeeps={activeDrivers}
           selectedStop={selectedStop}
           onSelectStop={setSelectedStop}
-          isWaiting={isWaiting}
+          journeyState={journeyState}
           onWait={handleWait}
           onCancel={handleCancel}
           onBoarded={() => handleCancel("boarded")}
+          onEndRide={handleEndRide}
           currentEta={currentEta}
           etaProgress={etaProgress}
           userLocation={userLocation}
@@ -170,9 +176,10 @@ export default function PassengerPage() {
 
 // ── Home Tab ──────────────────────────────────────────────────────────────────
 
-function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWaiting, onWait, onCancel, onBoarded, currentEta, etaProgress, userLocation, waitingCounts = {}, polylinePath }) {
+function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, journeyState, onWait, onCancel, onBoarded, onEndRide, currentEta, etaProgress, userLocation, waitingCounts = {}, polylinePath }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen,  setSearchOpen]  = useState(false);
+  const [isCardExpanded, setIsCardExpanded] = useState(true);
   const mapRef = useRef(null);
 
   const occCount = nearestJeep?.occupancy_count ?? 0;
@@ -204,19 +211,31 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
     ? ROUTE_STOPS.filter((s) => s.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : ROUTE_STOPS;
 
+  function panToWithOffset(target, zoom = null) {
+    if (!mapRef.current || !target) return;
+    if (zoom) mapRef.current.setZoom(zoom);
+    mapRef.current.panTo(target);
+    // Apply a Y-offset so the marker isn't hidden under the bottom sheet
+    setTimeout(() => mapRef.current?.panBy(0, 150), 300);
+  }
+
   function selectStop(stop) {
     onSelectStop(stop);
     setSearchQuery(stop.name);
     setSearchOpen(false);
-    mapRef.current?.panTo({ lat: stop.lat, lng: stop.lng });
+    panToWithOffset({ lat: stop.lat, lng: stop.lng });
   }
 
   function recenterOnJeep() {
-    if (nearestJeepLead && mapRef.current)
-      mapRef.current.panTo(nearestJeepLead);
-    else if (userLocation && mapRef.current)
-      mapRef.current.panTo(userLocation);
+    if (nearestJeepLead) panToWithOffset(nearestJeepLead);
+    else if (userLocation) panToWithOffset(userLocation);
   }
+
+  useEffect(() => {
+    if (journeyState === "riding" && nearestJeepLead) {
+      mapRef.current?.panTo(nearestJeepLead);
+    }
+  }, [nearestJeepLead, journeyState]);
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -274,48 +293,51 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
         )}
       </div>
 
-      {/* Floating search bar */}
-      <div className="absolute top-0 inset-x-0 z-20 px-4 pt-10 pb-3">
-        <div className="rounded-2xl bg-white/95 shadow-lg border border-pasada-border px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Search size={15} className="text-pasada-muted shrink-0" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
-              onFocus={() => setSearchOpen(true)}
-              onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
-              placeholder="Where to?"
-              className="flex-1 bg-transparent text-sm text-pasada-dark placeholder-pasada-muted outline-none"
-            />
-            {searchQuery && (
-              <button onClick={() => { setSearchQuery(""); setSearchOpen(false); }}>
-                <X size={14} className="text-pasada-muted" />
-              </button>
-            )}
-            <button className="text-pasada-muted/60">
-              <Mic size={15} />
-            </button>
-          </div>
-
-          {searchOpen && (
-            <div className="mt-2 space-y-0.5">
-              {filteredStops.map((stop) => (
-                <button
-                  key={stop.id}
-                  onMouseDown={() => selectStop(stop)}
-                  className="w-full flex items-center gap-2.5 rounded-xl px-2 py-2 text-sm text-left hover:bg-pasada-cream transition-colors"
-                >
-                  <MapPin size={13} className={selectedStop?.id === stop.id ? "text-pasada-rust" : "text-pasada-muted"} />
-                  <span className={selectedStop?.id === stop.id ? "font-semibold text-pasada-rust" : "text-pasada-dark"}>
-                    {stop.name}
-                  </span>
+      {/* Floating search bar - Hide when not idle */}
+      {journeyState === "idle" && (
+        <div className="absolute top-0 inset-x-0 z-20 px-4 pt-10 pb-3">
+          <div className="rounded-2xl bg-white/95 shadow-lg border border-pasada-border px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Search size={15} className="text-pasada-muted shrink-0" />
+              <input
+                data-testid="search-destination"
+                type="text"
+                value={searchQuery}
+                onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
+                onFocus={() => setSearchOpen(true)}
+                onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+                placeholder="Where to?"
+                className="flex-1 bg-transparent text-sm text-pasada-dark placeholder-pasada-muted outline-none"
+              />
+              {searchQuery && (
+                <button onClick={() => { setSearchQuery(""); setSearchOpen(false); }}>
+                  <X size={14} className="text-pasada-muted" />
                 </button>
-              ))}
+              )}
+              <button className="text-pasada-muted/60">
+                <Mic size={15} />
+              </button>
             </div>
-          )}
+
+            {searchOpen && (
+              <div className="mt-2 space-y-0.5">
+                {filteredStops.map((stop) => (
+                  <button
+                    key={stop.id}
+                    onMouseDown={() => selectStop(stop)}
+                    className="w-full flex items-center gap-2.5 rounded-xl px-2 py-2 text-sm text-left hover:bg-pasada-cream transition-colors"
+                  >
+                    <MapPin size={13} className={selectedStop?.id === stop.id ? "text-pasada-rust" : "text-pasada-muted"} />
+                    <span className={selectedStop?.id === stop.id ? "font-semibold text-pasada-rust" : "text-pasada-dark"}>
+                      {stop.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Recenter button */}
       <RecenterButton onClick={recenterOnJeep} />
@@ -330,110 +352,168 @@ function HomeTab({ nearestJeep, allJeeps = [], selectedStop, onSelectStop, isWai
         }}
       >
         <div className="px-4 space-y-3 pb-4">
-          {/* Next jeep card */}
-          <div className="rounded-2xl bg-white border border-pasada-border overflow-hidden shadow-sm">
-            {/* ETA header */}
-            <div className="flex w-full items-center justify-between px-4 py-2.5 border-b border-pasada-border">
-              <div className="flex items-center gap-2">
-                <Clock size={14} className="text-pasada-rust" />
-                <span className="text-sm font-bold text-pasada-dark">
-                  {currentEta != null ? `${currentEta} min away` : "Locating jeep…"}
-                </span>
-              </div>
-              <span className="text-xs text-pasada-muted">
-                {nearestJeep?.plate ?? "ABC 1234"}
-              </span>
-            </div>
-
-            {/* Route progress — pill track with bus icon */}
-            <div className="px-4 pt-3 pb-1">
-              <div className="relative h-8">
-                {/* Track pill */}
-                <div className="absolute inset-0 rounded-full bg-pasada-cream border border-pasada-border/60" />
-                {/* Fill */}
-                <div
-                  className="absolute left-0 top-0 bottom-0 rounded-full bg-pasada-rust/25 transition-all duration-1000"
-                  style={{ width: `${Math.max(jeepRoutePct * 100, 6)}%` }}
-                />
-                {/* Stop tick marks */}
-                {ROUTE_STOPS.map((stop, i) => {
-                  const pct = i / (ROUTE_STOPS.length - 1);
-                  return (
-                    <div
-                      key={stop.id}
-                      className={`absolute top-1/2 w-0.5 h-3 -translate-y-1/2 -translate-x-1/2 ${
-                        stop.id === selectedStop?.id ? "bg-pasada-dark" : "bg-pasada-border"
-                      }`}
-                      style={{ left: `${pct * 100}%` }}
-                    />
-                  );
-                })}
-                {/* Bus icon at leading edge of fill */}
-                <div
-                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10 transition-all duration-1000"
-                  style={{ left: `${Math.max(jeepRoutePct * 100, 6)}%` }}
-                >
-                  <div className="flex size-8 items-center justify-center rounded-full bg-pasada-rust border-2 border-white shadow-md">
-                    <Bus size={13} className="text-white" />
-                  </div>
+          
+          {/* Riding State */}
+          {journeyState === "riding" ? (
+            <div className="rounded-2xl bg-white border-2 border-pasada-rust overflow-hidden shadow-lg p-5 text-center animate-in slide-in-from-bottom-10 fade-in duration-500">
+              <div className="flex justify-center mb-2">
+                <div className="flex size-12 items-center justify-center rounded-full bg-pasada-rust/10 text-pasada-rust">
+                  <Bus size={24} />
                 </div>
               </div>
-            </div>
-
-            {/* Info row */}
-            <div className="flex items-center justify-between px-4 py-3 border-t border-pasada-border mt-1">
-              <div>
-                <p className="text-[11px] text-pasada-muted">Route</p>
-                <p className="text-sm font-bold text-pasada-dark">Lumban → Sta. Cruz</p>
+              <h2 className="text-xl font-bold text-pasada-dark mb-1">Currently Riding</h2>
+              <p className="text-sm text-pasada-muted mb-4">Lumban → Sta. Cruz Route</p>
+              
+              <div className="bg-pasada-cream rounded-xl p-3 mb-4 flex items-center justify-between text-sm font-semibold text-pasada-dark border border-pasada-border">
+                <span>Jeep Plate:</span>
+                <span className="text-pasada-rust tracking-wider">{nearestJeep?.plate ?? "ABC 1234"}</span>
               </div>
-              <div className="text-right">
-                <p className="text-[11px] text-pasada-muted">Jeep at</p>
-                <p className="text-sm font-bold text-pasada-dark">
-                  {nearestJeep?.current_stop ?? "—"}
-                </p>
-              </div>
-            </div>
 
-            {/* Seats badge */}
-            <div className="px-4 pb-3 flex items-center gap-2">
-              <div
-                className="flex items-center gap-1.5 rounded-full px-3 py-1"
-                style={{ backgroundColor: dotColor + "22" }}
-              >
-                <span className="size-2 rounded-full" style={{ backgroundColor: dotColor }} />
-                <span className="text-xs font-bold" style={{ color: dotColor }}>
-                  {isFull ? "Full" : `${seats} seats free`}
-                </span>
-              </div>
-              <span className="text-xs text-pasada-muted">{occCount}/{CAPACITY} onboard</span>
-            </div>
-          </div>
-
-          {/* Signal toggle button */}
-          <button
-            onClick={() => (isWaiting ? onCancel() : onWait())}
-            className={`w-full rounded-2xl py-4 text-base font-bold shadow-sm transition-colors ${
-              isWaiting
-                ? "bg-pasada-rust text-white hover:bg-pasada-rust/90"
-                : "border-2 border-pasada-muted/40 bg-white/70 text-pasada-muted hover:border-pasada-rust hover:text-pasada-rust"
-            }`}
-          >
-            {isWaiting ? `I'm waiting at ${selectedStop?.name ?? "…"}` : "Signal"}
-          </button>
-
-          {isWaiting && (
-            <>
-              <p className="text-center text-[11px] text-pasada-muted">
-                Press again to cancel
-              </p>
-
-              {/* Covers: passenger boarded this jeep, or a different one entirely */}
               <button
-                onClick={onBoarded}
-                className="w-full rounded-2xl py-3 text-sm font-semibold text-pasada-warm border border-pasada-border bg-white/70 hover:border-pasada-rust hover:text-pasada-rust transition-colors"
+                onClick={onEndRide}
+                className="w-full rounded-2xl py-3.5 text-sm font-bold bg-pasada-dark text-white hover:bg-pasada-dark/90 transition-colors shadow-sm"
               >
-                I've boarded a jeepney
+                End Ride
               </button>
+            </div>
+          ) : (
+            /* Idle & Waiting States */
+            <>
+              {journeyState === "waiting" && currentEta === 0 ? (
+                /* Arriving Now Card */
+                <div className="rounded-2xl bg-white border-2 border-pasada-rust overflow-hidden shadow-[0_0_15px_rgba(239,35,60,0.3)] animate-pulse transition-all duration-300 p-5 text-center">
+                  <h3 className="text-2xl font-bold text-pasada-rust mb-1 uppercase tracking-widest animate-bounce">Arriving Now</h3>
+                  <p className="text-sm text-pasada-dark font-semibold mb-3">Look out for Jeep <span className="bg-pasada-rust/10 px-2 py-0.5 rounded text-pasada-rust">{nearestJeep?.plate ?? "ABC 1234"}</span></p>
+                </div>
+              ) : (
+                /* Regular Next jeep card */
+                <div className="rounded-2xl bg-white border border-pasada-border overflow-hidden shadow-sm transition-all duration-300">
+                  {/* ETA header */}
+                  <button 
+                    data-testid="toggle-jeep-card-btn"
+                    onClick={() => setIsCardExpanded(!isCardExpanded)}
+                    className="flex w-full items-center justify-between px-4 py-3 bg-white hover:bg-pasada-cream transition-colors border-b border-pasada-border"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Clock size={14} className="text-pasada-rust" />
+                      <span className="text-sm font-bold text-pasada-dark">
+                        {currentEta != null ? `${currentEta} min away` : "Locating jeep…"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-pasada-muted">
+                        {nearestJeep?.plate ?? "ABC 1234"}
+                      </span>
+                      <ChevronDown size={16} className={`text-pasada-muted transition-transform duration-300 ${isCardExpanded ? '' : 'rotate-180'}`} />
+                    </div>
+                  </button>
+
+                  {/* Expandable Body */}
+                  <div className={`overflow-hidden transition-all duration-300 ${isCardExpanded ? 'max-h-64 opacity-100' : 'max-h-0 opacity-0'}`}>
+                    {/* Route progress — pill track with bus icon */}
+                    <div className="px-4 pt-3 pb-1">
+                      <div className="relative h-8">
+                        {/* Track pill */}
+                        <div className="absolute inset-0 rounded-full bg-pasada-cream border border-pasada-border/60" />
+                        {/* Fill */}
+                        <div
+                          className="absolute left-0 top-0 bottom-0 rounded-full bg-pasada-rust/25 transition-all duration-1000"
+                          style={{ width: `${Math.max(jeepRoutePct * 100, 6)}%` }}
+                        />
+                        {/* Stop tick marks */}
+                        {ROUTE_STOPS.map((stop, i) => {
+                          const pct = i / (ROUTE_STOPS.length - 1);
+                          return (
+                            <div
+                              key={stop.id}
+                              className={`absolute top-1/2 w-0.5 h-3 -translate-y-1/2 -translate-x-1/2 ${
+                                stop.id === selectedStop?.id ? "bg-pasada-dark" : "bg-pasada-border"
+                              }`}
+                              style={{ left: `${pct * 100}%` }}
+                            />
+                          );
+                        })}
+                        {/* Bus icon at leading edge of fill */}
+                        <div
+                          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10 transition-all duration-1000"
+                          style={{ left: `${Math.max(jeepRoutePct * 100, 6)}%` }}
+                        >
+                          <div className="flex size-8 items-center justify-center rounded-full bg-pasada-rust border-2 border-white shadow-md">
+                            <Bus size={13} className="text-white" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Info row */}
+                    <div className="flex items-center justify-between px-4 py-3 border-t border-pasada-border mt-1">
+                      <div>
+                        <p className="text-[11px] text-pasada-muted">Route</p>
+                        <p className="text-sm font-bold text-pasada-dark">Lumban → Sta. Cruz</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[11px] text-pasada-muted">Jeep at</p>
+                        <p className="text-sm font-bold text-pasada-dark">
+                          {nearestJeep?.current_stop ?? "—"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Seats badge */}
+                    <div className="px-4 pb-3 flex items-center gap-2">
+                      <div
+                        className="flex items-center gap-1.5 rounded-full px-3 py-1"
+                        style={{ backgroundColor: dotColor + "22" }}
+                      >
+                        <span className="size-2 rounded-full" style={{ backgroundColor: dotColor }} />
+                        <span className="text-xs font-bold" style={{ color: dotColor }}>
+                          {isFull ? "Full" : `${seats} seats free`}
+                        </span>
+                      </div>
+                      <span className="text-xs text-pasada-muted">{occCount}/{CAPACITY} onboard</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Signal toggle button */}
+              <button
+                data-testid="join-queue-btn"
+                onClick={() => {
+                  if (journeyState === "waiting") {
+                    onCancel();
+                  } else {
+                    onWait();
+                    if (mapRef.current) {
+                      const target = userLocation || selectedStop;
+                      if (target) panToWithOffset(target, 16);
+                    }
+                  }
+                }}
+                className={`w-full rounded-2xl py-4 text-base font-bold shadow-sm transition-colors ${
+                  journeyState === "waiting"
+                    ? "bg-pasada-rust text-white hover:bg-pasada-rust/90"
+                    : "border-2 border-pasada-muted/40 bg-white/70 text-pasada-muted hover:border-pasada-rust hover:text-pasada-rust"
+                }`}
+              >
+                {journeyState === "waiting" ? `I'm waiting at ${selectedStop?.name ?? "…"}` : "Signal"}
+              </button>
+
+              {journeyState === "waiting" && (
+                <div className="animate-in slide-in-from-bottom-2 fade-in duration-300">
+                  <p className="text-center text-[11px] text-pasada-muted mt-2 mb-3">
+                    Press again to cancel
+                  </p>
+
+                  <button
+                    data-testid="boarded-btn"
+                    onClick={onBoarded}
+                    className="w-full rounded-2xl py-3 text-sm font-semibold text-pasada-warm border border-pasada-border bg-white/70 hover:border-pasada-rust hover:text-pasada-rust transition-colors"
+                  >
+                    I've boarded a jeepney
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>

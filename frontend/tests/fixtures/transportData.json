@@ -1,0 +1,19 @@
+{
+  "driver": {
+    "id": "DRV-01482",
+    "pin": "148200"
+  },
+  "passenger": {
+    "email": "passenger@pasada.app",
+    "password": "pass1234"
+  },
+  "admin": {
+    "email": "admin@pasada.app",
+    "password": "admin1234"
+  },
+  "route": {
+    "id": "R01",
+    "name": "Lumban → Sta. Cruz",
+    "destination": "Sta. Cruz Plaza"
+  }
+}

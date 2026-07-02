@@ -43,7 +43,7 @@ export default function DriverLoginPage() {
       </div>
 
       {/* Main content */}
-      <div className="w-full max-w-sm space-y-6 -mt-6">
+      <div className="w-full max-w-sm space-y-6">
         <div className="space-y-2 text-center">
           <h1 className="font-garamond text-4xl font-bold text-pasada-dark">Driver Login</h1>
           <p className="text-sm text-pasada-muted leading-relaxed px-4">
@@ -69,6 +69,7 @@ export default function DriverLoginPage() {
                 <CreditCard size={18} className="text-pasada-rust" />
               </div>
               <input
+                data-testid="driver-id-input"
                 type="text"
                 value={driverId}
                 onChange={(e) => { setDriverId(e.target.value.toUpperCase()); setAuthError(null); }}
@@ -89,6 +90,7 @@ export default function DriverLoginPage() {
                 <Lock size={18} className="text-pasada-rust" />
               </div>
               <input
+                data-testid="driver-pin-input"
                 type={showPin ? "text" : "password"}
                 value={pin}
                 onChange={(e) => { setPin(e.target.value.replace(/\D/, "")); setAuthError(null); }}
@@ -110,6 +112,7 @@ export default function DriverLoginPage() {
 
           {/* Start Shift */}
           <button
+            data-testid="driver-login-submit"
             type="submit"
             disabled={loading}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-pasada-rust py-4 text-sm font-bold text-white hover:bg-pasada-rust/90 disabled:opacity-60 transition-colors mt-2"
